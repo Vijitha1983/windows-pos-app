@@ -113,6 +113,16 @@ export default function PaymentModal() {
   // ── Gift card helpers ───────────────────────────────────────────────────
   async function enableGiftCard() {
     setGiftVoucher({ show: true, amount: '' })
+
+    // 1st priority: custom field on POS Profile (gift_card account set in ERPNext)
+    const fromProfile = posProfileData?.gift_card
+    if (fromProfile) {
+      setGiftAccount(fromProfile)
+      setTimeout(() => giftVoucherRef.current?.focus(), 40)
+      return
+    }
+
+    // Fallback: try Mode of Payment lookup → account_name search
     setGiftAccResolving(true)
     const company          = posProfileData?.company || ''
     const accountShortName = await window.electronAPI.storeGet('giftAccountShort') || ''
@@ -498,8 +508,8 @@ export default function PaymentModal() {
                         {giftAccResolving
                           ? <span className="text-gray-500">Resolving account…</span>
                           : giftAccount
-                            ? <span className="text-green-500">{giftAccount}</span>
-                            : <span className="text-amber-400">Account not found — set in Settings → Payment Methods</span>}
+                            ? <span className="text-green-500 truncate">{giftAccount}</span>
+                            : <span className="text-amber-400">No account — set Gift Card field in ERPNext POS Profile</span>}
                       </div>
                     </div>
                     <input
