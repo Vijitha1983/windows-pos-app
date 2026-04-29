@@ -91,7 +91,7 @@ function makeRequest({ method, url, body, extraHeaders = {} }) {
     })
 
     req.on('error', reject)
-    req.setTimeout(30000, () => { req.destroy(); reject(new Error('Request timed out')) })
+    req.setTimeout(60000, () => { req.destroy(); reject(new Error('Request timed out — server is slow, please retry')) })
 
     if (bodyStr) req.write(bodyStr)
     req.end()

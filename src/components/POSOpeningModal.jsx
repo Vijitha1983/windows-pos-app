@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { createPOSOpeningEntry } from '../services/api'
+import { createPOSOpeningEntry, getOpenPOSSession } from '../services/api'
 
 export default function POSOpeningModal() {
   const {
@@ -32,18 +32,31 @@ export default function POSOpeningModal() {
     setLoading(true)
     setError('')
     try {
-      const cash    = parseFloat(openingCash) || 0
-      const methods = (posProfileData?.payments || []).map((p) => p.mode_of_payment)
-      if (!methods.some((m) => m.toLowerCase().includes('cash'))) methods.unshift('Cash')
+      const cash = parseFloat(openingCash) || 0
 
-      const entry = await createPOSOpeningEntry(
-        posProfile,
-        posProfileData?.company || '',
-        username,
-        methods,
-        cash,
-      )
-      setPosOpeningEntry(entry.name, cash, username, entry.period_start_date)
+      // Check first — a previous attempt may have succeeded on the server but
+      // timed out before the response arrived. Reuse it instead of creating a duplicate.
+      let existing = null
+      try { existing = await getOpenPOSSession(posProfile) } catch {}
+
+      let entry = existing
+      if (!entry) {
+        const methods = (posProfileData?.payments || []).map((p) => p.mode_of_payment)
+        if (!methods.some((m) => m.toLowerCase().includes('cash'))) methods.unshift('Cash')
+        entry = await createPOSOpeningEntry(
+          posProfile,
+          posProfileData?.company || '',
+          username,
+          methods,
+          cash,
+        )
+      }
+
+      const sessionCash = existing
+        ? (existing.balance_details || []).find((b) => b.mode_of_payment?.toLowerCase().includes('cash'))?.opening_amount ?? cash
+        : cash
+
+      setPosOpeningEntry(entry.name, sessionCash, username, entry.period_start_date)
       setShowOpeningModal(false)
     } catch (err) {
       setError(err?.response?.data?.message || err.message || 'Failed to create opening entry')
