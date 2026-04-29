@@ -1,0 +1,55 @@
+{
+  "name": "erpnext-pos",
+  "version": "1.0.0",
+  "description": "ERPNext POS Desktop Application",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "kill-port 5173 & concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "vite build",
+    "electron": "electron .",
+    "dist": "vite build && electron-builder",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "electron-store": "^8.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "zustand": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "autoprefixer": "^10.4.16",
+    "concurrently": "^8.2.0",
+    "electron": "^27.0.0",
+    "electron-builder": "^24.6.0",
+    "kill-port": "^2.0.1",
+    "postcss": "^8.4.31",
+    "tailwindcss": "^3.3.5",
+    "vite": "^5.0.0",
+    "vite-plugin-electron": "^0.15.0",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.erpnext.pos",
+    "productName": "ERPNext POS",
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    }
+  }
+}

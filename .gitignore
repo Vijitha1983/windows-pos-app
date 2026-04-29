@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+release/
+out/
+
+# electron-builder artefacts
+*.exe
+*.dmg
+*.AppImage
+*.snap
+*.deb
+*.rpm
+
+# environment / secrets
+.env
+.env.*
+*.local
+
+# editor
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# electron-store persisted data (contains session cookies — never commit)
+app-data/

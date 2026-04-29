@@ -1,0 +1,22 @@
+appId: com.erpnext.pos
+productName: ERPNext POS
+directories:
+  output: release
+  buildResources: public
+files:
+  - dist/**/*
+  - electron/**/*
+  - node_modules/**/*
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: public/icon.ico
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ERPNext POS
