@@ -26,11 +26,19 @@ async function request(method, path, body = null, extraHeaders = {}) {
     if (isAuthFailure) {
       window.dispatchEvent(new CustomEvent('auth:expired'))
     }
-    const msg =
-      result.data?.message ||
-      result.data?.exc_type ||
-      result.message ||
-      `HTTP ${result.status}`
+    // ERPNext puts the human-readable detail in _server_messages (JSON-encoded array).
+    // Fall back to message → exc_type so the user sees something meaningful.
+    let msg = result.data?.message || ''
+    if (!msg && result.data?._server_messages) {
+      try {
+        const parsed = JSON.parse(result.data._server_messages)
+        msg = parsed
+          .map((m) => { try { return JSON.parse(m).message } catch { return m } })
+          .filter(Boolean)
+          .join('\n')
+      } catch {}
+    }
+    if (!msg) msg = result.data?.exc_type || result.message || `HTTP ${result.status}`
     const err = new Error(msg)
     err.status = result.status
     err.response = { data: result.data, status: result.status }
@@ -343,13 +351,35 @@ export async function closePOSSession(posOpeningEntry, posProfile, company, user
     posting_date: today,
   }))
 
-  const paymentReconciliation = Object.entries(byMode).map(([mode, amount]) => ({
-    mode_of_payment: mode,
-    opening_amount:  mode.toLowerCase().includes('cash') ? openingCash : 0,
-    expected_amount: amount,
-    closing_amount:  amount,
-    difference:      0,
-  }))
+  // Build reconciliation starting from all modes in the opening entry, so every
+  // configured payment method is present even if it had zero sales today.
+  const openingModes = openingRes.data?.balance_details || []
+  const reconMap = {}
+  for (const b of openingModes) {
+    reconMap[b.mode_of_payment] = {
+      mode_of_payment: b.mode_of_payment,
+      opening_amount:  b.opening_amount || 0,
+      expected_amount: 0,
+      closing_amount:  0,
+      difference:      0,
+    }
+  }
+  // Overlay actual collected amounts
+  for (const [mode, amount] of Object.entries(byMode)) {
+    if (reconMap[mode]) {
+      reconMap[mode].expected_amount = amount
+      reconMap[mode].closing_amount  = amount
+    } else {
+      reconMap[mode] = {
+        mode_of_payment: mode,
+        opening_amount:  mode.toLowerCase().includes('cash') ? openingCash : 0,
+        expected_amount: amount,
+        closing_amount:  amount,
+        difference:      0,
+      }
+    }
+  }
+  const paymentReconciliation = Object.values(reconMap)
 
   // Step 1: create draft
   const draft = await request('POST', '/api/resource/POS Closing Entry', {
