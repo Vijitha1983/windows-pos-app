@@ -39,6 +39,7 @@ export const usePOSStore = create((set, get) => ({
   // POS Session
   posOpeningEntry: null,   // ERPNext POS Opening Entry name
   openingCash: 0,          // cash amount at session start
+  sessionOpenedBy: null,   // username who created the opening entry (may differ from current user)
 
   // Modals
   itemDialog: null,        // { item, levels[] } — unified item/price/qty dialog
@@ -172,8 +173,8 @@ export const usePOSStore = create((set, get) => ({
   closeItemDialog: () => set({ itemDialog: null }),
 
   // POS Session actions
-  setPosOpeningEntry: (name, cash) => set({ posOpeningEntry: name, openingCash: Number(cash) || 0 }),
-  clearPOSSession: () => set({ posOpeningEntry: null, openingCash: 0 }),
+  setPosOpeningEntry: (name, cash, openedBy) => set({ posOpeningEntry: name, openingCash: Number(cash) || 0, sessionOpenedBy: openedBy || null }),
+  clearPOSSession: () => set({ posOpeningEntry: null, openingCash: 0, sessionOpenedBy: null }),
 
   // Modals
   openPriceLevelModal: (item, priceLevels) => set({ priceLevelModal: { item, priceLevels } }),

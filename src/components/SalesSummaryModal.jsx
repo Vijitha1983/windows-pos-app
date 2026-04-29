@@ -6,7 +6,7 @@ export default function SalesSummaryModal() {
   const {
     showSummaryModal, setShowSummaryModal,
     posProfile, posProfileData, username,
-    posOpeningEntry, openingCash, clearPOSSession,
+    posOpeningEntry, openingCash, sessionOpenedBy, clearPOSSession,
     setShowOpeningModal,
   } = usePOSStore()
 
@@ -275,7 +275,12 @@ export default function SalesSummaryModal() {
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-1 h-5 rounded-full bg-amber-500" />
                   <h3 className="text-white font-bold text-sm uppercase tracking-wider">Cashier Summary</h3>
-                  <span className="ml-auto text-xs text-gray-500">{username}</span>
+                  <div className="ml-auto flex flex-col items-end">
+                    <span className="text-xs text-gray-300">{username}</span>
+                    {sessionOpenedBy && sessionOpenedBy !== username && (
+                      <span className="text-[10px] text-amber-400">Session opened by {sessionOpenedBy}</span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden">

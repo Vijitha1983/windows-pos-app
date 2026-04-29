@@ -54,7 +54,7 @@ export default function POSMain() {
           const cash = (session.balance_details || [])
             .find((b) => b.mode_of_payment?.toLowerCase().includes('cash'))
             ?.opening_amount || 0
-          store.setPosOpeningEntry(session.name, cash)
+          store.setPosOpeningEntry(session.name, cash, session.user)
         } else {
           store.setShowOpeningModal(true)
         }
@@ -165,7 +165,12 @@ export default function POSMain() {
         <div className="flex items-center gap-4 text-xs text-gray-400" style={{ WebkitAppRegion: 'no-drag' }}>
           <span>{now.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</span>
           <span>|</span>
-          <span>{store.username}</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-white">{store.username}</span>
+            {store.sessionOpenedBy && store.sessionOpenedBy !== store.username && (
+              <span className="text-amber-400 text-[10px]">(session by {store.sessionOpenedBy})</span>
+            )}
+          </div>
           <span>|</span>
           <button
             onClick={() => store.setShowSummaryModal(true)}
