@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { createPOSInvoice, submitPOSInvoice, resolveGiftCardAccount } from '../services/api'
+import { createPOSInvoice, submitPOSInvoice, resolveGiftCardAccount, validateGiftVoucherSerial } from '../services/api'
 import { queueInvoice } from '../services/cache'
 
 export default function PaymentModal() {
@@ -27,6 +27,11 @@ export default function PaymentModal() {
   const containerRef   = useRef(null)
   const inputRefs      = useRef([])
   const giftVoucherRef = useRef(null)
+  const serialRef      = useRef(null)
+
+  const [giftSerial,       setGiftSerial]       = useState('')
+  const [giftSerialStatus, setGiftSerialStatus] = useState(null) // null|'checking'|'valid'|'invalid'|'expired'
+  const [giftSerialData,   setGiftSerialData]   = useState(null)
 
   // ── Init payment rows when modal opens ──────────────────────────────────
   useEffect(() => {
@@ -47,6 +52,9 @@ export default function PaymentModal() {
     setChangeOverlay(null)
     setGiftVoucher({ show: false, amount: '' })
     setGiftAccount(null)
+    setGiftSerial('')
+    setGiftSerialStatus(null)
+    setGiftSerialData(null)
 
     // Load gift card mode name from settings
     window.electronAPI.storeGet('giftModeName').then((name) => {
@@ -98,14 +106,22 @@ export default function PaymentModal() {
       setActiveIdx((i) => (i + 1) % payments.length)
       return
     }
-    if (changeOverlay === null && document.activeElement?.tagName !== 'INPUT') {
-      if (e.key.toLowerCase() === 'c') {
+    if (changeOverlay === null) {
+      // Allow shortcuts even when a number input is focused (letters are ignored by number inputs).
+      // Suppress shortcuts when a text input (serial number field) is active.
+      const inText = document.activeElement?.tagName === 'INPUT' && document.activeElement?.type === 'text'
+      if (!inText && e.key.toLowerCase() === 'c') {
         const i = payments.findIndex((p) => p.mode.toLowerCase().includes('cash'))
         if (i >= 0) { e.preventDefault(); setActiveIdx(i) }
       }
-      if (e.key.toLowerCase() === 'd') {
+      if (!inText && e.key.toLowerCase() === 'd') {
         const i = payments.findIndex((p) => p.mode.toLowerCase().includes('card'))
         if (i >= 0) { e.preventDefault(); setActiveIdx(i) }
+      }
+      if (!inText && e.key.toLowerCase() === 'g') {
+        e.preventDefault()
+        if (!giftVoucher.show) enableGiftCard()
+        else serialRef.current?.focus()
       }
     }
   }
@@ -135,6 +151,30 @@ export default function PaymentModal() {
   function disableGiftCard() {
     setGiftVoucher({ show: false, amount: '' })
     setGiftAccount(null)
+    setGiftSerial('')
+    setGiftSerialStatus(null)
+    setGiftSerialData(null)
+  }
+
+  async function validateSerial(serial) {
+    const s = serial.trim()
+    if (!s) return
+    setGiftSerialStatus('checking')
+    setGiftSerialData(null)
+    try {
+      const data = await validateGiftVoucherSerial(s)
+      setGiftSerialData(data)
+      const today = new Date().toISOString().split('T')[0]
+      if (data.status !== 'Delivered') {
+        setGiftSerialStatus('invalid')
+      } else if (data.warranty_expiry_date && data.warranty_expiry_date < today) {
+        setGiftSerialStatus('expired')
+      } else {
+        setGiftSerialStatus('valid')
+      }
+    } catch {
+      setGiftSerialStatus('invalid')
+    }
   }
 
   // ── Payment amount logic ────────────────────────────────────────────────
@@ -236,11 +276,11 @@ export default function PaymentModal() {
 
     const allPayments = [
       ...payments.filter((p) => p.amount > 0),
-      ...(giftAmt > 0 ? [{ mode: giftModeName, amount: giftAmt }] : []),
+      ...(giftAmt > 0 ? [{ mode: giftModeName, amount: giftAmt, serial: giftSerial }] : []),
     ]
     const payRows = allPayments.map((p) => `
         <tr>
-          <td style="padding:1px 0">${p.mode}</td>
+          <td style="padding:1px 0">${p.mode}${p.serial ? ` #${p.serial}` : ''}</td>
           <td style="text-align:right;padding:1px 0">${fmt(p.amount)}</td>
         </tr>`).join('')
 
@@ -496,7 +536,8 @@ export default function PaymentModal() {
               {/* ── Gift Card ────────────────────────────────── */}
               {giftVoucher.show ? (
                 <div className="rounded-xl border-2 border-purple-600 bg-purple-900/15 overflow-hidden">
-                  <div className="flex items-center gap-3 px-4 py-3">
+                  {/* Header */}
+                  <div className="flex items-center gap-3 px-4 py-3 border-b border-purple-800/30">
                     <div className="w-8 h-8 rounded-lg bg-purple-800/60 flex items-center justify-center flex-shrink-0">
                       <svg className="w-4 h-4 text-purple-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
@@ -508,26 +549,108 @@ export default function PaymentModal() {
                         {giftAccResolving
                           ? <span className="text-gray-500">Resolving account…</span>
                           : giftAccount
-                            ? <span className="text-green-500 truncate">{giftAccount}</span>
-                            : <span className="text-amber-400">No account — set Gift Card field in ERPNext POS Profile</span>}
+                            ? <span className="text-green-500">{giftAccount}</span>
+                            : <span className="text-amber-400">No account — set Gift Card field in POS Profile</span>}
                       </div>
                     </div>
-                    <input
-                      ref={giftVoucherRef}
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={giftVoucher.amount}
-                      placeholder="0.00"
-                      onChange={(e) => setGiftVoucher((g) => ({ ...g, amount: e.target.value }))}
-                      onKeyDown={(e) => { if (e.key === 'Enter') return }}
-                      className="w-32 rounded-lg px-3 py-2 text-right font-bold text-base focus:outline-none tabular-nums bg-gray-700 border-2 border-purple-500 text-purple-200"
-                    />
-                    <button
-                      type="button"
-                      onClick={disableGiftCard}
-                      className="ml-1 text-gray-600 hover:text-red-400 text-lg leading-none flex-shrink-0"
-                    >×</button>
+                    <button type="button" onClick={disableGiftCard} className="text-gray-600 hover:text-red-400 text-xl leading-none flex-shrink-0">×</button>
+                  </div>
+
+                  {/* Denomination quick-select */}
+                  <div className="px-4 pt-3 pb-2">
+                    <div className="text-xs text-gray-500 mb-1.5">Denomination</div>
+                    <div className="flex gap-1.5 flex-wrap">
+                      {[1000, 2500, 5000, 7500, 10000].map((d) => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => { setGiftVoucher((g) => ({ ...g, amount: String(d) })); serialRef.current?.focus() }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                            parseFloat(giftVoucher.amount) === d
+                              ? 'bg-purple-700 border-purple-500 text-white'
+                              : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-purple-500 hover:text-purple-200'
+                          }`}
+                        >
+                          {d >= 1000 ? `${d / 1000}K` : d}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Serial number + Amount */}
+                  <div className="px-4 pb-3 space-y-2">
+                    {/* Serial input + status icon */}
+                    <div className="flex items-center gap-2">
+                      <input
+                        ref={serialRef}
+                        type="text"
+                        placeholder="Voucher serial number"
+                        value={giftSerial}
+                        onChange={(e) => { setGiftSerial(e.target.value); setGiftSerialStatus(null); setGiftSerialData(null) }}
+                        onBlur={() => { if (giftSerial.trim()) validateSerial(giftSerial) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); validateSerial(giftSerial) } }}
+                        className="flex-1 rounded-lg px-3 py-2 text-sm text-white bg-gray-700 border-2 border-gray-600 focus:outline-none focus:border-purple-500 placeholder-gray-600"
+                      />
+                      <div className="w-7 h-7 flex items-center justify-center flex-shrink-0">
+                        {giftSerialStatus === 'checking' && (
+                          <svg className="w-5 h-5 animate-spin text-purple-400" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                          </svg>
+                        )}
+                        {giftSerialStatus === 'valid' && (
+                          <div className="w-6 h-6 rounded-full bg-green-600 flex items-center justify-center">
+                            <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                        )}
+                        {giftSerialStatus === 'invalid' && (
+                          <div className="w-6 h-6 rounded-full bg-red-700 flex items-center justify-center">
+                            <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </div>
+                        )}
+                        {giftSerialStatus === 'expired' && (
+                          <div className="w-6 h-6 rounded-full bg-amber-600 flex items-center justify-center">
+                            <span className="text-white text-xs font-bold">!</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Validation feedback */}
+                    {giftSerialStatus === 'valid' && giftSerialData && (
+                      <p className="text-green-400 text-xs pl-1">
+                        Valid · {giftSerialData.item_code}
+                        {giftSerialData.warranty_expiry_date ? ` · Expires ${giftSerialData.warranty_expiry_date}` : ''}
+                      </p>
+                    )}
+                    {giftSerialStatus === 'invalid' && (
+                      <p className="text-red-400 text-xs pl-1">Not found or voucher not yet issued</p>
+                    )}
+                    {giftSerialStatus === 'expired' && (
+                      <p className="text-amber-400 text-xs pl-1">
+                        Expired{giftSerialData?.warranty_expiry_date ? ` on ${giftSerialData.warranty_expiry_date}` : ''}
+                      </p>
+                    )}
+
+                    {/* Amount */}
+                    <div className="flex items-center gap-3">
+                      <span className="text-gray-400 text-sm flex-1">Amount</span>
+                      <input
+                        ref={giftVoucherRef}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={giftVoucher.amount}
+                        placeholder="0.00"
+                        onChange={(e) => setGiftVoucher((g) => ({ ...g, amount: e.target.value }))}
+                        onKeyDown={(e) => { if (e.key === 'Enter') return }}
+                        className="w-32 rounded-lg px-3 py-2 text-right font-bold text-base focus:outline-none tabular-nums bg-gray-700 border-2 border-purple-500 text-purple-200"
+                      />
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -540,6 +663,7 @@ export default function PaymentModal() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
                   </svg>
                   Apply {giftModeName}
+                  <span className="text-purple-700 text-xs ml-1">Key: G</span>
                 </button>
               )}
             </div>

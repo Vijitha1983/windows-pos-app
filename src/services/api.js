@@ -109,6 +109,15 @@ export async function resolveGiftCardAccount(modeName, company, accountShortName
   return null
 }
 
+// ─── Gift Voucher Serial Validation ─────────────────────────────────────────
+
+// Returns the Serial No document from ERPNext.
+// Caller checks: status === 'Delivered' (was sold) and warranty_expiry_date not past.
+export async function validateGiftVoucherSerial(serialNo) {
+  const data = await request('GET', `/api/resource/Serial No/${encodeURIComponent(serialNo)}`)
+  return data.data
+}
+
 // ─── POS Profiles ────────────────────────────────────────────────────────────
 
 export async function getPOSProfiles() {
@@ -298,7 +307,7 @@ export async function getTodayInvoiceSummary(posProfile) {
       ['posting_date', '=', today],
       ['docstatus', '=', 1],
     ]),
-    fields: JSON.stringify(['name', 'grand_total', 'customer']),
+    fields: JSON.stringify(['name', 'grand_total', 'customer', 'consolidated_invoice']),
     limit_page_length: 500,
     order_by: 'creation desc',
   }))
@@ -344,7 +353,10 @@ export async function closePOSSession(posOpeningEntry, posProfile, company, user
   const now        = localNow()
   const today      = now.slice(0, 10)
 
-  const posTransactions = invoices.map((inv) => ({
+  // Exclude invoices already merged into a previous closing entry — ERPNext
+  // rejects them with "POS Invoice is already consolidated".
+  const openInvoices = invoices.filter((inv) => !inv.consolidated_invoice)
+  const posTransactions = openInvoices.map((inv) => ({
     pos_invoice:  inv.name,
     grand_total:  inv.grand_total,
     customer:     inv.customer || '',

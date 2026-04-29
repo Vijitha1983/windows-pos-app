@@ -15,6 +15,7 @@ export default function BillTable() {
   const [discountType, setDiscountType] = useState('amount')
   const [showHeld, setShowHeld] = useState(false)
   const editRef = useRef(null)
+  const discountInputRef = useRef(null)
 
   const items = currentBill.items
   const subTotal = getSubTotal()
@@ -49,6 +50,10 @@ export default function BillTable() {
       } else if (e.key === 'Enter' && selectedRow >= 0 && items[selectedRow]) {
         e.preventDefault()
         startEdit(items[selectedRow])
+      } else if (e.key === 'F6') {
+        e.preventDefault()
+        discountInputRef.current?.focus()
+        discountInputRef.current?.select()
       }
     }
     window.addEventListener('keydown', handler)
@@ -199,8 +204,11 @@ export default function BillTable() {
 
         {/* Discount */}
         <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-400 flex-1">Discount</span>
+          <span className="text-sm text-gray-400 flex-1">
+            Discount <kbd className="text-gray-600 text-[10px] font-mono bg-gray-750 px-1 rounded">F6</kbd>
+          </span>
           <input
+            ref={discountInputRef}
             type="number"
             min="0"
             placeholder="0"
