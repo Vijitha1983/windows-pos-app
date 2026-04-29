@@ -24,6 +24,8 @@ export default function PaymentModal() {
   const [giftModeName,       setGiftModeName]       = useState('Gift Card')  // ERPNext Mode of Payment name
   const [giftAccount,        setGiftAccount]        = useState(null)         // resolved GL account (or null)
   const [giftAccResolving,   setGiftAccResolving]   = useState(false)
+  const [cashAccount,        setCashAccount]        = useState(null)         // GL account for cash payments
+  const [bankAccount,        setBankAccount]        = useState(null)         // GL account for card/bank payments
   const containerRef   = useRef(null)
   const inputRefs      = useRef([])
   const giftVoucherRef = useRef(null)
@@ -56,10 +58,10 @@ export default function PaymentModal() {
     setGiftSerialStatus(null)
     setGiftSerialData(null)
 
-    // Load gift card mode name from settings
-    window.electronAPI.storeGet('giftModeName').then((name) => {
-      setGiftModeName(name || 'Gift Card')
-    })
+    // Load account settings
+    window.electronAPI.storeGet('giftModeName').then((name) => setGiftModeName(name || 'Gift Card'))
+    window.electronAPI.storeGet('cashAccount').then((v) => setCashAccount(v || null))
+    window.electronAPI.storeGet('bankAccount').then((v) => setBankAccount(v || null))
 
     setTimeout(() => {
       containerRef.current?.focus()
@@ -254,7 +256,16 @@ export default function PaymentModal() {
     // how much was returned so the GL books the net received figure only.
     const paymentEntries = [
       ...payments
-        .map((p) => ({ mode_of_payment: p.mode, amount: p.amount }))
+        .map((p) => {
+          const isCash = p.mode.toLowerCase().includes('cash')
+          const isCard = p.mode.toLowerCase().includes('card') || p.mode.toLowerCase().includes('bank')
+          const account = isCash ? cashAccount : isCard ? bankAccount : null
+          return {
+            mode_of_payment: p.mode,
+            amount: p.amount,
+            ...(account ? { account } : {}),
+          }
+        })
         .filter((p) => p.amount > 0),
       ...(giftAmt > 0 ? [{
         mode_of_payment: giftModeName,

@@ -145,6 +145,65 @@ export default function Settings({ onClose }) {
           <section>
             <h3 className="text-gray-300 font-medium mb-2 text-sm uppercase tracking-wide">Payment Methods</h3>
             <div className="space-y-4">
+
+              {/* Cash GL Account */}
+              <div className="space-y-1">
+                <label className="block text-sm text-gray-400">Cash — GL Account</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="e.g. Cash - IT"
+                    defaultValue=""
+                    id="cashAccountInput"
+                    onFocus={async (e) => {
+                      if (!e.target.value) {
+                        const v = await window.electronAPI.storeGet('cashAccount')
+                        e.target.value = v || ''
+                      }
+                    }}
+                    className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                  <button
+                    onClick={async () => {
+                      const val = document.getElementById('cashAccountInput').value.trim()
+                      await window.electronAPI.storeSet('cashAccount', val)
+                      setSaved(true); setTimeout(() => setSaved(false), 1500)
+                    }}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+                  >Save</button>
+                </div>
+                <p className="text-gray-600 text-xs">Full account name as it appears in ERPNext Chart of Accounts, e.g. <span className="font-mono text-gray-500">Cash - IT</span>.</p>
+              </div>
+
+              {/* Bank / Card GL Account */}
+              <div className="space-y-1">
+                <label className="block text-sm text-gray-400">Bank / Credit Card — GL Account</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="e.g. Bank Account - IT"
+                    defaultValue=""
+                    id="bankAccountInput"
+                    onFocus={async (e) => {
+                      if (!e.target.value) {
+                        const v = await window.electronAPI.storeGet('bankAccount')
+                        e.target.value = v || ''
+                      }
+                    }}
+                    className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                  <button
+                    onClick={async () => {
+                      const val = document.getElementById('bankAccountInput').value.trim()
+                      await window.electronAPI.storeSet('bankAccount', val)
+                      setSaved(true); setTimeout(() => setSaved(false), 1500)
+                    }}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+                  >Save</button>
+                </div>
+                <p className="text-gray-600 text-xs">Full account name for card/bank payments, e.g. <span className="font-mono text-gray-500">Debtors - IT</span> or your bank account name.</p>
+              </div>
+
               {/* Gift Card mode name */}
               <div className="space-y-1">
                 <label className="block text-sm text-gray-400">Gift Card — Mode of Payment Name</label>
