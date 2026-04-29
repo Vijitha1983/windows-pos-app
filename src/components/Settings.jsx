@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { getPOSProfiles, getPOSProfile } from '../services/api'
+import { getPOSProfiles, getPOSProfile, getGLAccounts } from '../services/api'
 import { cacheClear } from '../services/cache'
 import { signOut } from '../services/auth'
 
@@ -10,6 +10,49 @@ export default function Settings({ onClose }) {
   const [loadingProfiles, setLoadingProfiles] = useState(false)
   const [saved, setSaved] = useState(false)
   const [urlInput, setUrlInput] = useState(store.erpnextUrl)
+
+  // GL account selectors
+  const [cashAccounts,       setCashAccounts]       = useState([])
+  const [bankAccounts,       setBankAccounts]       = useState([])
+  const [loadingCash,        setLoadingCash]        = useState(false)
+  const [loadingBank,        setLoadingBank]        = useState(false)
+  const [savedCashAccount,   setSavedCashAccount]   = useState('')
+  const [savedBankAccount,   setSavedBankAccount]   = useState('')
+
+  useEffect(() => {
+    window.electronAPI.storeGet('cashAccount').then((v) => setSavedCashAccount(v || ''))
+    window.electronAPI.storeGet('bankAccount').then((v) => setSavedBankAccount(v || ''))
+  }, [])
+
+  async function loadCashAccounts() {
+    setLoadingCash(true)
+    try {
+      const list = await getGLAccounts('Cash', store.posProfileData?.company)
+      setCashAccounts(list)
+    } catch {}
+    setLoadingCash(false)
+  }
+
+  async function loadBankAccounts() {
+    setLoadingBank(true)
+    try {
+      const list = await getGLAccounts('Bank', store.posProfileData?.company)
+      setBankAccounts(list)
+    } catch {}
+    setLoadingBank(false)
+  }
+
+  async function selectCashAccount(name) {
+    await window.electronAPI.storeSet('cashAccount', name)
+    setSavedCashAccount(name)
+    setSaved(true); setTimeout(() => setSaved(false), 1500)
+  }
+
+  async function selectBankAccount(name) {
+    await window.electronAPI.storeSet('bankAccount', name)
+    setSavedBankAccount(name)
+    setSaved(true); setTimeout(() => setSaved(false), 1500)
+  }
 
   async function loadProfiles() {
     setLoadingProfiles(true)
@@ -147,61 +190,71 @@ export default function Settings({ onClose }) {
             <div className="space-y-4">
 
               {/* Cash GL Account */}
-              <div className="space-y-1">
-                <label className="block text-sm text-gray-400">Cash — GL Account</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="e.g. Cash - IT"
-                    defaultValue=""
-                    id="cashAccountInput"
-                    onFocus={async (e) => {
-                      if (!e.target.value) {
-                        const v = await window.electronAPI.storeGet('cashAccount')
-                        e.target.value = v || ''
-                      }
-                    }}
-                    className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                  />
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-gray-400 text-sm">Cash — GL Account</h4>
                   <button
-                    onClick={async () => {
-                      const val = document.getElementById('cashAccountInput').value.trim()
-                      await window.electronAPI.storeSet('cashAccount', val)
-                      setSaved(true); setTimeout(() => setSaved(false), 1500)
-                    }}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
-                  >Save</button>
+                    onClick={loadCashAccounts}
+                    disabled={loadingCash}
+                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                  >
+                    {loadingCash ? 'Loading…' : 'Load accounts'}
+                  </button>
                 </div>
-                <p className="text-gray-600 text-xs">Full account name as it appears in ERPNext Chart of Accounts, e.g. <span className="font-mono text-gray-500">Cash - IT</span>.</p>
+                <div className="bg-gray-700/50 rounded-lg px-4 py-2 text-sm text-white mb-2">
+                  Current: <span className="text-green-400">{savedCashAccount || <span className="text-gray-500">Not set</span>}</span>
+                </div>
+                {cashAccounts.length > 0 && (
+                  <div className="space-y-1 max-h-36 overflow-y-auto">
+                    {cashAccounts.map((a) => (
+                      <button
+                        key={a.name}
+                        onClick={() => selectCashAccount(a.name)}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                          savedCashAccount === a.name
+                            ? 'bg-green-700 text-white'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        }`}
+                      >
+                        {a.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Bank / Card GL Account */}
-              <div className="space-y-1">
-                <label className="block text-sm text-gray-400">Bank / Credit Card — GL Account</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="e.g. Bank Account - IT"
-                    defaultValue=""
-                    id="bankAccountInput"
-                    onFocus={async (e) => {
-                      if (!e.target.value) {
-                        const v = await window.electronAPI.storeGet('bankAccount')
-                        e.target.value = v || ''
-                      }
-                    }}
-                    className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                  />
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-gray-400 text-sm">Bank / Credit Card — GL Account</h4>
                   <button
-                    onClick={async () => {
-                      const val = document.getElementById('bankAccountInput').value.trim()
-                      await window.electronAPI.storeSet('bankAccount', val)
-                      setSaved(true); setTimeout(() => setSaved(false), 1500)
-                    }}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
-                  >Save</button>
+                    onClick={loadBankAccounts}
+                    disabled={loadingBank}
+                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                  >
+                    {loadingBank ? 'Loading…' : 'Load accounts'}
+                  </button>
                 </div>
-                <p className="text-gray-600 text-xs">Full account name for card/bank payments, e.g. <span className="font-mono text-gray-500">Debtors - IT</span> or your bank account name.</p>
+                <div className="bg-gray-700/50 rounded-lg px-4 py-2 text-sm text-white mb-2">
+                  Current: <span className="text-green-400">{savedBankAccount || <span className="text-gray-500">Not set</span>}</span>
+                </div>
+                {bankAccounts.length > 0 && (
+                  <div className="space-y-1 max-h-36 overflow-y-auto">
+                    {bankAccounts.map((a) => (
+                      <button
+                        key={a.name}
+                        onClick={() => selectBankAccount(a.name)}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                          savedBankAccount === a.name
+                            ? 'bg-green-700 text-white'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        }`}
+                      >
+                        {a.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Gift Card mode name */}

@@ -109,6 +109,23 @@ export async function resolveGiftCardAccount(modeName, company, accountShortName
   return null
 }
 
+// ─── GL Accounts ─────────────────────────────────────────────────────────────
+
+// Fetches leaf GL accounts filtered by account_type ('Cash', 'Bank', etc.)
+// and optionally by company. Used to populate account pickers in Settings.
+export async function getGLAccounts(accountType, company) {
+  const filters = [['is_group', '=', 0]]
+  if (accountType) filters.push(['account_type', '=', accountType])
+  if (company)     filters.push(['company',      '=', company])
+  const data = await request('GET', '/api/resource/Account' + qs({
+    filters:          JSON.stringify(filters),
+    fields:           JSON.stringify(['name', 'account_name']),
+    limit_page_length: 100,
+    order_by:         'name asc',
+  }))
+  return data.data || []
+}
+
 // ─── Gift Voucher Serial Validation ─────────────────────────────────────────
 
 // Returns the Serial No document from ERPNext.
