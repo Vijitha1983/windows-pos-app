@@ -235,7 +235,7 @@ export default function PaymentModal() {
   }
 
   // ── Build ERPNext invoice payload ────────────────────────────────────────
-  function buildInvoice() {
+  function buildInvoice(changeAmt = 0) {
     const today     = new Date().toISOString().split('T')[0]
     const warehouse = posProfileData?.warehouse || ''
     // Use POS Profile's default customer so "Walk-in Customer" resolves correctly
@@ -250,7 +250,8 @@ export default function PaymentModal() {
       warehouse,                   // required by stock controller
     }))
 
-    // Pass full amounts — ERPNext calculates change_amount itself from overpayment
+    // Payment entries carry the full tendered amounts; change_amount tells ERPNext
+    // how much was returned so the GL books the net received figure only.
     const paymentEntries = [
       ...payments
         .map((p) => ({ mode_of_payment: p.mode, amount: p.amount }))
@@ -263,15 +264,16 @@ export default function PaymentModal() {
     ]
 
     const doc = {
-      doctype:       'POS Invoice',
-      pos_profile:   posProfile,
-      company:       posProfileData?.company  || '',
-      currency:      posProfileData?.currency || 'LKR',
-      customer:      currentBill.customer?.name || defaultCustomer,
-      posting_date:  today,
-      set_warehouse: warehouse,
+      doctype:        'POS Invoice',
+      pos_profile:    posProfile,
+      company:        posProfileData?.company  || '',
+      currency:       posProfileData?.currency || 'LKR',
+      customer:       currentBill.customer?.name || defaultCustomer,
+      posting_date:   today,
+      set_warehouse:  warehouse,
       items,
-      payments:      paymentEntries,
+      payments:       paymentEntries,
+      change_amount:  changeAmt || 0,
     }
 
     // Link to the open POS session — required by ERPNext v14+ before submission
@@ -388,8 +390,8 @@ export default function PaymentModal() {
     setSubmitting(true)
     setError('')
 
-    const invoiceData = buildInvoice()
-    const changeAmt   = change   // capture current change before state clears
+    const changeAmt   = change           // capture before state resets
+    const invoiceData = buildInvoice(changeAmt)
 
     try {
       if (!isOnline) throw new Error('offline')

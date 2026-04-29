@@ -58,7 +58,7 @@ export default function ItemGrid() {
 
   function showError(msg) {
     setErrorMsg(msg)
-    setTimeout(() => setErrorMsg(''), 4000)
+    setTimeout(() => setErrorMsg(''), 12000)
   }
 
   // Grid keyboard navigation
@@ -183,8 +183,14 @@ export default function ItemGrid() {
 
       {/* Error toast */}
       {errorMsg && (
-        <div className="mx-4 mb-2 bg-red-900/50 border border-red-700 text-red-300 text-xs px-3 py-2 rounded-lg flex-shrink-0">
-          {errorMsg}
+        <div className="mx-4 mb-2 bg-red-900/50 border border-red-700 text-red-300 text-xs px-3 py-2 rounded-lg flex-shrink-0 flex items-center justify-between gap-3">
+          <span className="flex-1">{errorMsg}</span>
+          <button
+            onClick={() => { setErrorMsg(''); loadItems() }}
+            className="flex-shrink-0 border border-red-600 hover:border-red-400 hover:text-white rounded px-2 py-0.5 transition-colors"
+          >
+            Retry
+          </button>
         </div>
       )}
 
