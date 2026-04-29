@@ -73,6 +73,22 @@ export default function PaymentModal() {
     }
   }, [activeIdx])
 
+  // When gift card amount changes, auto-reduce cash so cash + gift = grand total.
+  // This prevents the gift card from being treated as extra payment on top of cash.
+  useEffect(() => {
+    if (!giftVoucher.show) return
+    const gift = parseFloat(giftVoucher.amount) || 0
+    setPayments((prev) => {
+      const cardTotal = prev
+        .filter((p) => !p.mode.toLowerCase().includes('cash'))
+        .reduce((s, p) => s + p.amount, 0)
+      const cashNeeded = Math.max(0, parseFloat((grandTotal - cardTotal - gift).toFixed(2)))
+      return prev.map((p) =>
+        p.mode.toLowerCase().includes('cash') ? { ...p, amount: cashNeeded, autoFilled: gift > 0 } : p
+      )
+    })
+  }, [giftVoucher.amount])
+
   // ── Computed totals ──────────────────────────────────────────────────────
   const giftAmt     = parseFloat(giftVoucher.amount) || 0
   const nonCashTotal = payments
@@ -154,6 +170,16 @@ export default function PaymentModal() {
     setGiftSerial('')
     setGiftSerialStatus(null)
     setGiftSerialData(null)
+    // Restore cash to cover the full bill again
+    setPayments((prev) => {
+      const cardTotal = prev
+        .filter((p) => !p.mode.toLowerCase().includes('cash'))
+        .reduce((s, p) => s + p.amount, 0)
+      const cashNeeded = Math.max(0, parseFloat((grandTotal - cardTotal).toFixed(2)))
+      return prev.map((p) =>
+        p.mode.toLowerCase().includes('cash') ? { ...p, amount: cashNeeded, autoFilled: false } : p
+      )
+    })
   }
 
   async function validateSerial(serial) {
