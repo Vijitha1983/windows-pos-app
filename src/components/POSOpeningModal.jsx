@@ -43,7 +43,7 @@ export default function POSOpeningModal() {
         methods,
         cash,
       )
-      setPosOpeningEntry(entry.name, cash)
+      setPosOpeningEntry(entry.name, cash, username, entry.period_start_date)
       setShowOpeningModal(false)
     } catch (err) {
       setError(err?.response?.data?.message || err.message || 'Failed to create opening entry')

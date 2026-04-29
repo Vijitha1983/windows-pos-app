@@ -54,7 +54,7 @@ export default function POSMain() {
           const cash = (session.balance_details || [])
             .find((b) => b.mode_of_payment?.toLowerCase().includes('cash'))
             ?.opening_amount || 0
-          store.setPosOpeningEntry(session.name, cash, session.user)
+          store.setPosOpeningEntry(session.name, cash, session.user, session.period_start_date)
         } else {
           store.setShowOpeningModal(true)
         }

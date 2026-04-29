@@ -6,7 +6,7 @@ export default function SalesSummaryModal() {
   const {
     showSummaryModal, setShowSummaryModal,
     posProfile, posProfileData, username,
-    posOpeningEntry, openingCash, sessionOpenedBy, clearPOSSession,
+    posOpeningEntry, openingCash, sessionOpenedBy, sessionStartDate, clearPOSSession,
     setShowOpeningModal,
   } = usePOSStore()
 
@@ -29,7 +29,7 @@ export default function SalesSummaryModal() {
   async function loadSummary() {
     setLoading(true)
     try {
-      const data = await getTodayInvoiceSummary(posProfile, posOpeningEntry)
+      const data = await getTodayInvoiceSummary(posProfile, sessionStartDate)
       setSummary(data)
     } catch (err) {
       console.error('Summary fetch failed:', err)
