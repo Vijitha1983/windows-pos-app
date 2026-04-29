@@ -299,14 +299,19 @@ export async function createPOSOpeningEntry(posProfile, company, user, paymentMe
 
 // Returns { invoices, totalSales, byMode, count }
 // byMode = { 'Cash': 30000, 'Card': 15000, ... }
-export async function getTodayInvoiceSummary(posProfile) {
+export async function getTodayInvoiceSummary(posProfile, posOpeningEntry) {
   const today = new Date().toISOString().split('T')[0]
+  const filters = [
+    ['pos_profile', '=', posProfile],
+    ['posting_date', '=', today],
+    ['docstatus', '=', 1],
+  ]
+  // Scope to the current opening entry so a new session started on the same
+  // day doesn't show invoices from the previous (already-closed) session.
+  if (posOpeningEntry) filters.push(['pos_opening_entry', '=', posOpeningEntry])
+
   const invoicesRes = await request('GET', '/api/resource/POS Invoice' + qs({
-    filters: JSON.stringify([
-      ['pos_profile', '=', posProfile],
-      ['posting_date', '=', today],
-      ['docstatus', '=', 1],
-    ]),
+    filters: JSON.stringify(filters),
     fields: JSON.stringify(['name', 'grand_total', 'customer', 'consolidated_invoice']),
     limit_page_length: 500,
     order_by: 'creation desc',

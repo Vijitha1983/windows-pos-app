@@ -29,7 +29,7 @@ export default function SalesSummaryModal() {
   async function loadSummary() {
     setLoading(true)
     try {
-      const data = await getTodayInvoiceSummary(posProfile)
+      const data = await getTodayInvoiceSummary(posProfile, posOpeningEntry)
       setSummary(data)
     } catch (err) {
       console.error('Summary fetch failed:', err)
