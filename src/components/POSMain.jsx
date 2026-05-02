@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
 import { getItemGroups, getOpenPOSSession } from '../services/api'
+import { signOut } from '../services/auth'
 import { cacheGet, cacheSet, getQueuedInvoices } from '../services/cache'
 import ItemGrid from './ItemGrid'
 import BillTable from './BillTable'
@@ -69,6 +70,21 @@ export default function POSMain() {
   }, [store.posProfile])
 
   // Global keyboard shortcuts
+  // Session shortcuts — fire even when modals are open
+  useEffect(() => {
+    const handler = async (e) => {
+      if (e.ctrlKey && e.key === 'l') { e.preventDefault(); store.lockScreen() }
+      if (e.ctrlKey && e.key === 'q') {
+        e.preventDefault()
+        await signOut()
+        store.setLoggedIn(false)
+        store.setCurrentScreen('login')
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
   useEffect(() => {
     const handler = (e) => {
       if (store.itemDialog || store.paymentModal || store.showOpeningModal || store.showSummaryModal || settingsOpen) return
@@ -211,6 +227,15 @@ export default function POSMain() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
               </svg>
             )}
+          </button>
+          <button
+            onClick={store.lockScreen}
+            title="Lock POS (Ctrl+L)"
+            className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
           </button>
           <button
             onClick={() => setSettingsOpen(true)}

@@ -29,6 +29,8 @@ export default function ItemDialog() {
   const [rows,        setRows]   = useState([])
   const [selectedIdx, setIdx]    = useState(0)
   const [qty,         setQty]    = useState('1')
+  const [serialNo,    setSerialNo] = useState('')
+  const [batchNo,     setBatchNo]  = useState('')
 
   const containerRef = useRef(null)
   const qtyRef       = useRef(null)
@@ -41,6 +43,8 @@ export default function ItemDialog() {
       setRows(r)
       setIdx(0)
       setQty('1')
+      setSerialNo('')
+      setBatchNo('')
       discountRefs.current = []
       setTimeout(() => {
         containerRef.current?.focus()
@@ -72,14 +76,13 @@ export default function ItemDialog() {
 
   function handleAdd() {
     if (qtyNum <= 0 || !row) return
-    // Pass a synthetic price-level object so addItemToBill records the right price + label
     const effectiveLevel = {
       level:           row.label,
       our_price:       ourPrice,
       marked_price:    row.markedPrice,
       discount_amount: row.discount,
     }
-    addItemToBill(item, effectiveLevel, qtyNum)
+    addItemToBill(item, effectiveLevel, qtyNum, serialNo.trim(), batchNo.trim())
     closeItemDialog()
   }
 
@@ -247,6 +250,44 @@ export default function ItemDialog() {
             </tbody>
           </table>
         </div>
+
+        {/* ── Serial No / Batch No (only for tracked items) ── */}
+        {(item?.has_serial_no || item?.has_batch_no) && (
+          <div className="px-6 py-3 border-t border-gray-700 flex gap-4">
+            {item?.has_serial_no ? (
+              <div className="flex-1">
+                <label className="block text-xs text-amber-400 font-medium mb-1">
+                  Serial No <span className="text-gray-500 font-normal">(one per line · optional)</span>
+                </label>
+                <textarea
+                  value={serialNo}
+                  onChange={(e) => setSerialNo(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  rows={2}
+                  placeholder={"SN-001\nSN-002"}
+                  className="w-full bg-gray-700 border border-amber-700/50 focus:border-amber-500 rounded-lg px-3 py-1.5 text-white text-xs font-mono placeholder-gray-600 focus:outline-none resize-none"
+                />
+              </div>
+            ) : null}
+            {item?.has_batch_no ? (
+              <div className="flex-1">
+                <label className="block text-xs text-amber-400 font-medium mb-1">
+                  Batch No <span className="text-gray-500 font-normal">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={batchNo}
+                  onChange={(e) => setBatchNo(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  placeholder="BATCH-001"
+                  className="w-full bg-gray-700 border border-amber-700/50 focus:border-amber-500 rounded-lg px-3 py-1.5 text-white text-xs font-mono placeholder-gray-600 focus:outline-none"
+                />
+              </div>
+            ) : null}
+          </div>
+        )}
 
         {/* ── Footer: Amount + Buttons ── */}
         <div className="px-6 py-4 border-t border-gray-700 flex items-center justify-between gap-4">

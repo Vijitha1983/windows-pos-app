@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { authenticate } from '../services/auth'
+import { useEffect, useRef, useState } from 'react'
+import { authenticate, signOut } from '../services/auth'
 import { getPOSProfiles, getPOSProfile, setBaseURL } from '../services/api'
 import { usePOSStore } from '../store/posStore'
 
@@ -13,6 +13,31 @@ export default function Login() {
   const [error, setError] = useState('')
 
   const store = usePOSStore()
+  const isLocked = store.isLoggedIn && !!store.username  // came from Ctrl+L lock, not fresh boot
+
+  const lockPasswordRef = useRef(null)
+  useEffect(() => {
+    if (isLocked) setTimeout(() => lockPasswordRef.current?.focus(), 80)
+  }, [isLocked])
+
+  // ── Unlock (locked state) ─────────────────────────────────────────────────
+  const [lockPassword, setLockPassword] = useState('')
+  const [lockError,    setLockError]    = useState('')
+
+  async function handleUnlock(e) {
+    e.preventDefault()
+    setLockError('')
+    setLoading(true)
+    try {
+      await authenticate(store.erpnextUrl, store.username, lockPassword)
+      setLockPassword('')
+      store.setCurrentScreen('pos')
+    } catch (err) {
+      setLockError(err.response?.data?.message || err.message || 'Incorrect password')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function handleLogin(e) {
     e.preventDefault()
@@ -48,6 +73,82 @@ export default function Login() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // ── Locked screen ─────────────────────────────────────────────────────────
+  if (isLocked) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-gray-800 border-2 border-gray-600 rounded-2xl mb-4">
+              <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            <h1 className="text-xl font-bold text-white">POS Locked</h1>
+            <p className="text-gray-500 text-sm mt-1">Enter your password to resume</p>
+          </div>
+
+          <div className="bg-gray-800 rounded-2xl shadow-2xl overflow-hidden">
+            <form onSubmit={handleUnlock} className="p-6 space-y-4">
+              {/* Cashier name — read only */}
+              <div className="flex items-center gap-3 bg-gray-700/50 rounded-lg px-4 py-3">
+                <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+                  <span className="text-white text-sm font-bold uppercase">
+                    {store.username?.[0] || '?'}
+                  </span>
+                </div>
+                <div>
+                  <p className="text-white text-sm font-medium">{store.username}</p>
+                  <p className="text-gray-500 text-xs">{store.posProfile}</p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Password</label>
+                <input
+                  ref={lockPasswordRef}
+                  type="password"
+                  value={lockPassword}
+                  onChange={(e) => setLockPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              {lockError && (
+                <div className="bg-red-900/40 border border-red-700 rounded-lg px-4 py-2.5 text-red-300 text-sm">
+                  {lockError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg transition-colors"
+              >
+                {loading ? 'Unlocking…' : 'Unlock POS'}
+              </button>
+            </form>
+
+            <div className="px-6 pb-5 text-center">
+              <button
+                onClick={async () => {
+                  await signOut()
+                  store.setLoggedIn(false)
+                  store.setUsername('')
+                }}
+                className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+              >
+                Sign out instead
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (

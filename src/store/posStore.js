@@ -68,6 +68,7 @@ export const usePOSStore = create((set, get) => ({
   setShowImages: (v) => set({ showImages: v }),
   setOnline: (v) => set({ isOnline: v }),
   setCurrentScreen: (s) => set({ currentScreen: s }),
+  lockScreen: () => set({ currentScreen: 'login' }),  // lock without clearing session data
 
   setItems: (items) => set({ items }),
   setItemGroups: (groups) => set({ itemGroups: groups }),
@@ -75,12 +76,14 @@ export const usePOSStore = create((set, get) => ({
   setSearchQuery: (q) => set({ searchQuery: q }),
 
   // Bill operations
-  addItemToBill: (item, priceLevel, qty = 1) => {
+  addItemToBill: (item, priceLevel, qty = 1, serialNo = '', batchNo = '') => {
     const price = priceLevel ? priceLevel.our_price : item.standard_rate || 0
     const levelName = priceLevel ? priceLevel.level : 'Standard'
     set((state) => {
-      const existing = state.currentBill.items.find(
-        (i) => i.item_code === item.item_code && i.priceLevel === levelName
+      // Items with serial numbers are always separate rows (each unit is unique)
+      const canMerge = !serialNo && !batchNo
+      const existing = canMerge && state.currentBill.items.find(
+        (i) => i.item_code === item.item_code && i.priceLevel === levelName && !i.serial_no && !i.batch_no
       )
       if (existing) {
         return {
@@ -101,6 +104,8 @@ export const usePOSStore = create((set, get) => ({
         total: qty * price,
         priceLevel: levelName,
         uom: item.stock_uom || 'Nos',
+        serial_no: serialNo || '',
+        batch_no:  batchNo  || '',
       }
       return {
         currentBill: {

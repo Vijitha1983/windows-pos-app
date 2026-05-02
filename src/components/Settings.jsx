@@ -310,6 +310,35 @@ export default function Settings({ onClose }) {
                 )}
               </div>
 
+              {/* Koko Pay mode name */}
+              <div className="space-y-1">
+                <label className="block text-sm text-gray-400">Koko Pay — ERPNext Mode of Payment Name</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="e.g. Bank Transfer"
+                    defaultValue=""
+                    id="kokoModeNameInput"
+                    onFocus={async (e) => {
+                      if (!e.target.value) {
+                        const v = await window.electronAPI.storeGet('kokoModeName')
+                        e.target.value = v || ''
+                      }
+                    }}
+                    className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-orange-500"
+                  />
+                  <button
+                    onClick={async () => {
+                      const val = document.getElementById('kokoModeNameInput').value.trim()
+                      await window.electronAPI.storeSet('kokoModeName', val)
+                      setSaved(true); setTimeout(() => setSaved(false), 1500)
+                    }}
+                    className="bg-orange-700 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+                  >Save</button>
+                </div>
+                <p className="text-gray-600 text-xs">Must match exactly the Mode of Payment name in ERPNext. e.g. <span className="font-mono text-gray-500">Bank Transfer</span></p>
+              </div>
+
               {/* Gift Card mode name */}
               <div className="space-y-1">
                 <label className="block text-sm text-gray-400">Gift Card — Mode of Payment Name</label>

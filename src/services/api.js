@@ -27,18 +27,21 @@ async function request(method, path, body = null, extraHeaders = {}) {
       window.dispatchEvent(new CustomEvent('auth:expired'))
     }
     // ERPNext puts the human-readable detail in _server_messages (JSON-encoded array).
-    // Fall back to message → exc_type so the user sees something meaningful.
-    let msg = result.data?.message || ''
-    if (!msg && result.data?._server_messages) {
+    // result.data.message is often just the exception class name (e.g. "ValidationError")
+    // so check _server_messages first, then fall back to message/exc_type.
+    let msg = ''
+    if (result.data?._server_messages) {
       try {
         const parsed = JSON.parse(result.data._server_messages)
         msg = parsed
           .map((m) => { try { return JSON.parse(m).message } catch { return m } })
           .filter(Boolean)
-          .join('\n')
+          .join(' ')
+          .replace(/<[^>]*>/g, '')   // strip HTML links ERPNext includes
+          .replace(/\s+/g, ' ').trim()
       } catch {}
     }
-    if (!msg) msg = result.data?.exc_type || result.message || `HTTP ${result.status}`
+    if (!msg) msg = result.data?.message || result.data?.exc_type || `HTTP ${result.status}`
     const err = new Error(msg)
     err.status = result.status
     err.response = { data: result.data, status: result.status }
@@ -112,26 +115,64 @@ export async function resolveGiftCardAccount(modeName, company, accountShortName
 // ─── Category Wise Sales ─────────────────────────────────────────────────────
 
 // Returns { [item_group]: total_amount } for the given POS invoice names.
-// Tries POS Invoice Item first; falls back to Sales Invoice Item.
+// Fetches each invoice individually so we get the full items child table,
+// then looks up item_group from the Item doctype for any rows missing it.
 export async function getCategoryWiseSales(invoiceNames) {
   if (!invoiceNames || invoiceNames.length === 0) return {}
-  const tryFetch = async (doctype, extraFilter = []) => {
-    const data = await request('GET', `/api/resource/${doctype}` + qs({
-      filters: JSON.stringify([['parent', 'in', invoiceNames], ...extraFilter]),
-      fields: JSON.stringify(['item_group', 'amount']),
-      limit_page_length: 5000,
+
+  // Step 1 — fetch each POS Invoice in parallel (batches of 10)
+  const allRows = []  // { item_code, item_group, amount }
+  const batchSize = 10
+  for (let i = 0; i < invoiceNames.length; i += batchSize) {
+    const batch = invoiceNames.slice(i, i + batchSize)
+    await Promise.all(batch.map(async (name) => {
+      try {
+        const data = await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(name)}`)
+        for (const item of data.data?.items || []) {
+          if (item.item_code && item.amount > 0) {
+            allRows.push({
+              item_code:  item.item_code,
+              item_group: item.item_group || null,
+              amount:     item.amount,
+            })
+          }
+        }
+      } catch {}
     }))
-    const map = {}
-    for (const row of data.data || []) {
-      if (row.item_group && row.amount > 0) {
-        map[row.item_group] = (map[row.item_group] || 0) + row.amount
-      }
-    }
-    return map
   }
-  try { return await tryFetch('POS Invoice Item') } catch {}
-  try { return await tryFetch('Sales Invoice Item', [['parenttype', '=', 'POS Invoice']]) } catch {}
-  return {}
+
+  if (allRows.length === 0) return {}
+
+  // Step 2 — for any rows where item_group wasn't stored on the invoice,
+  //           look it up from Item doctype
+  const missing = [...new Set(
+    allRows.filter((r) => !r.item_group).map((r) => r.item_code)
+  )]
+  if (missing.length > 0) {
+    try {
+      const data = await request('GET', '/api/resource/Item' + qs({
+        filters:          JSON.stringify([['name', 'in', missing]]),
+        fields:           JSON.stringify(['name', 'item_group']),
+        limit_page_length: missing.length + 10,
+      }))
+      const map = {}
+      for (const item of data.data || []) {
+        if (item.name && item.item_group) map[item.name] = item.item_group
+      }
+      for (const row of allRows) {
+        if (!row.item_group && map[row.item_code]) row.item_group = map[row.item_code]
+      }
+    } catch {}
+  }
+
+  // Step 3 — aggregate by item_group
+  const result = {}
+  for (const row of allRows) {
+    if (row.item_group) {
+      result[row.item_group] = (result[row.item_group] || 0) + row.amount
+    }
+  }
+  return result
 }
 
 // ─── Stock Balance ───────────────────────────────────────────────────────────
@@ -148,6 +189,22 @@ export async function getWarehouseStock(warehouse) {
   const map = {}
   for (const b of data.data || []) { map[b.item_code] = b.actual_qty ?? 0 }
   return map
+}
+
+// ─── Email ───────────────────────────────────────────────────────────────────
+
+// Sends an email immediately via Frappe's whitelisted communication.make method.
+// Requires an outgoing email account configured in ERPNext.
+export async function sendSummaryEmail(toEmail, subject, htmlContent) {
+  const data = await request('POST', '/api/method/frappe.core.doctype.communication.communication.make', {
+    recipients:           toEmail,
+    subject,
+    content:              htmlContent,
+    send_email:           1,
+    communication_medium: 'Email',
+    sent_or_received:     'Sent',
+  })
+  return data
 }
 
 // ─── GL Accounts ─────────────────────────────────────────────────────────────
@@ -468,11 +525,25 @@ export async function closePOSSession(posOpeningEntry, posProfile, company, user
     period_end_date:        now,
     pos_transactions:       posTransactions,
     payment_reconciliation: paymentReconciliation,
+    ignore_pricing_rule:    1,   // prevent Standard Selling price list updates on consolidation
   })
   if (!draft.data?.name) throw new Error('Closing entry created but no name returned')
 
   // Step 2: re-fetch so submit receives the server's current `modified` timestamp
   const full = await request('GET', `/api/resource/POS Closing Entry/${encodeURIComponent(draft.data.name)}`)
-  const sub  = await request('POST', '/api/method/frappe.client.submit', { doc: full.data })
-  return sub.message || full.data
+
+  // Step 3: submit — ERPNext may return non-OK even on success if it emits
+  // informational msgprint() messages (e.g. "Item Price updated for…") during
+  // consolidation. Verify actual docstatus before treating it as an error.
+  try {
+    const sub = await request('POST', '/api/method/frappe.client.submit', { doc: full.data })
+    return sub.message || full.data
+  } catch (submitErr) {
+    // Confirm whether the closing entry actually got submitted despite the error
+    try {
+      const check = await request('GET', `/api/resource/POS Closing Entry/${encodeURIComponent(draft.data.name)}`)
+      if (check.data?.docstatus === 1) return check.data  // submitted — treat as success
+    } catch {}
+    throw submitErr  // genuinely failed
+  }
 }

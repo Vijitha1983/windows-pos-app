@@ -44,12 +44,9 @@ export default function PaymentModal() {
       ? [...posProfileData.payments]
       : [{ mode_of_payment: 'Cash' }]
 
-    // Always include Cash and Koko Pay even if not in POS Profile
+    // Always include Cash even if not in POS Profile
     if (!methods.some((m) => m.mode_of_payment.toLowerCase().includes('cash'))) {
       methods.unshift({ mode_of_payment: 'Cash' })
-    }
-    if (!methods.some((m) => m.mode_of_payment.toLowerCase().includes('koko'))) {
-      methods.push({ mode_of_payment: 'Koko Pay' })
     }
 
     const initial = methods.map((m, i) => ({
@@ -225,27 +222,23 @@ export default function PaymentModal() {
     const isCash  = payments[idx].mode.toLowerCase().includes('cash')
 
     setPayments((prev) => {
-      let updated = prev.map((p, i) =>
+      const updated = prev.map((p, i) =>
         i === idx ? { ...p, amount: entered, autoFilled: false } : p
       )
-      if (isCash) {
-        const remaining = parseFloat((grandTotal - entered).toFixed(2))
-        if (remaining > 0) {
-          let filled = false
-          updated = updated.map((p, i) => {
-            if (i !== idx && !filled && !p.mode.toLowerCase().includes('cash')) {
-              filled = true
-              return { ...p, amount: remaining, autoFilled: true }
-            }
-            if (i !== idx && p.autoFilled) return { ...p, amount: 0, autoFilled: false }
-            return p
-          })
-        } else {
-          updated = updated.map((p, i) =>
-            i !== idx && p.autoFilled ? { ...p, amount: 0, autoFilled: false } : p
-          )
-        }
+      if (!isCash) {
+        // Non-cash changed: auto-adjust cash to cover whatever is still owed
+        const nonCashTotal = updated
+          .filter((p) => !p.mode.toLowerCase().includes('cash'))
+          .reduce((s, p) => s + p.amount, 0)
+        const currentGift  = parseFloat(giftVoucher.amount) || 0
+        const cashNeeded   = Math.max(0, parseFloat((grandTotal - nonCashTotal - currentGift).toFixed(2)))
+        return updated.map((p) =>
+          p.mode.toLowerCase().includes('cash')
+            ? { ...p, amount: cashNeeded, autoFilled: cashNeeded > 0 }
+            : p
+        )
       }
+      // Cash changed: just set it directly — change will show if customer overpays
       return updated
     })
   }
@@ -257,14 +250,19 @@ export default function PaymentModal() {
     // Use POS Profile's default customer so "Walk-in Customer" resolves correctly
     const defaultCustomer = posProfileData?.customer || 'Walk-in Customer'
 
-    const items = currentBill.items.map((item) => ({
-      item_code: item.item_code,
-      item_name: item.item_name,
-      qty:       item.qty,
-      rate:      item.unitPrice,
-      uom:       item.uom || 'Nos',
-      warehouse,                   // required by stock controller
-    }))
+    const items = currentBill.items.map((item) => {
+      const entry = {
+        item_code: item.item_code,
+        item_name: item.item_name,
+        qty:       item.qty,
+        rate:      item.unitPrice,
+        uom:       item.uom || 'Nos',
+        warehouse,
+      }
+      if (item.serial_no) entry.serial_no = item.serial_no
+      if (item.batch_no)  entry.batch_no  = item.batch_no
+      return entry
+    })
 
     // Payment entries carry the full tendered amounts; change_amount tells ERPNext
     // how much was returned so the GL books the net received figure only.
