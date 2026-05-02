@@ -14,8 +14,15 @@ export default function ItemGrid() {
   const [loadingItem, setLoadingItem] = useState(null)  // item_code currently fetching
   const [errorMsg, setErrorMsg]       = useState('')
   const [focusedIdx, setFocusedIdx]   = useState(-1)
+  const [hiddenItems, setHiddenItems] = useState(new Set())
+  const [showHidden, setShowHidden]   = useState(false)
   const searchRef = useRef(null)
   const gridRef   = useRef(null)
+
+  // Load hidden items from store on mount
+  useEffect(() => {
+    window.electronAPI.storeGet('hiddenItems').then((v) => setHiddenItems(new Set(v || [])))
+  }, [])
 
   // Focus search on F1 / Ctrl+F
   useEffect(() => {
@@ -138,6 +145,17 @@ export default function ItemGrid() {
     return () => window.removeEventListener('keypress', handler)
   }, [])
 
+  async function toggleHideItem(e, item_code) {
+    e.stopPropagation()
+    e.preventDefault()
+    const next = new Set(hiddenItems)
+    if (next.has(item_code)) { next.delete(item_code) } else { next.add(item_code) }
+    setHiddenItems(next)
+    await window.electronAPI.storeSet('hiddenItems', [...next])
+  }
+
+  const displayItems = showHidden ? items : items.filter((item) => !hiddenItems.has(item.item_code))
+
   return (
     <div className="flex flex-col h-full">
 
@@ -179,6 +197,18 @@ export default function ItemGrid() {
             {grp}
           </button>
         ))}
+        {hiddenItems.size > 0 && (
+          <button
+            onClick={() => setShowHidden((v) => !v)}
+            className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ml-auto ${
+              showHidden
+                ? 'bg-amber-600 text-white'
+                : 'bg-gray-700/60 text-amber-500 border border-amber-700/50 hover:bg-gray-600'
+            }`}
+          >
+            {showHidden ? `Hide hidden (${hiddenItems.size})` : `${hiddenItems.size} hidden`}
+          </button>
+        )}
       </div>
 
       {/* Error toast */}
@@ -204,9 +234,9 @@ export default function ItemGrid() {
             </svg>
             Loading items…
           </div>
-        ) : items.length === 0 ? (
+        ) : displayItems.length === 0 ? (
           <div className="flex items-center justify-center h-32 text-gray-500 text-sm">
-            No items found
+            {hiddenItems.size > 0 && !showHidden ? 'All items hidden — click the amber button to show' : 'No items found'}
           </div>
         ) : (
           <div
@@ -214,21 +244,37 @@ export default function ItemGrid() {
             className="grid gap-2"
             style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))' }}
           >
-            {items.map((item, idx) => {
+            {displayItems.map((item, idx) => {
               const isFetching = loadingItem === item.item_code
               const isFocused  = focusedIdx === idx
+              const isHidden   = hiddenItems.has(item.item_code)
               return (
                 <button
                   key={item.item_code}
                   onClick={() => handleItemClick(item)}
                   onFocus={() => setFocusedIdx(idx)}
                   disabled={!!loadingItem}
-                  className={`relative text-left rounded-xl p-3 transition-all border-2 ${
+                  className={`group relative text-left rounded-xl p-3 transition-all border-2 ${
                     isFocused
                       ? 'border-blue-500 bg-blue-900/30 shadow-lg shadow-blue-900/20'
-                      : 'border-transparent bg-gray-700 hover:bg-gray-600 hover:border-gray-500'
+                      : isHidden
+                        ? 'border-dashed border-amber-700/50 bg-gray-800/60 opacity-60 hover:opacity-100 hover:border-amber-500'
+                        : 'border-transparent bg-gray-700 hover:bg-gray-600 hover:border-gray-500'
                   } ${loadingItem && !isFetching ? 'opacity-50' : ''}`}
                 >
+                  {/* Hide/unhide button — visible on hover */}
+                  <span
+                    onClick={(e) => toggleHideItem(e, item.item_code)}
+                    title={isHidden ? 'Show item' : 'Hide item'}
+                    className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-xs leading-none z-10 transition-opacity cursor-pointer select-none ${
+                      isHidden
+                        ? 'bg-amber-700/80 text-amber-200 opacity-100'
+                        : 'bg-gray-600/80 text-gray-400 opacity-0 group-hover:opacity-100'
+                    }`}
+                  >
+                    {isHidden ? '↩' : '−'}
+                  </span>
+
                   {/* Loading overlay */}
                   {isFetching && (
                     <div className="absolute inset-0 bg-gray-900/60 rounded-xl flex items-center justify-center">

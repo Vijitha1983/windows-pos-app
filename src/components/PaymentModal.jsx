@@ -41,8 +41,16 @@ export default function PaymentModal() {
     if (!paymentModal) return
 
     const methods = posProfileData?.payments?.length
-      ? posProfileData.payments
+      ? [...posProfileData.payments]
       : [{ mode_of_payment: 'Cash' }]
+
+    // Always include Cash and Koko Pay even if not in POS Profile
+    if (!methods.some((m) => m.mode_of_payment.toLowerCase().includes('cash'))) {
+      methods.unshift({ mode_of_payment: 'Cash' })
+    }
+    if (!methods.some((m) => m.mode_of_payment.toLowerCase().includes('koko'))) {
+      methods.push({ mode_of_payment: 'Koko Pay' })
+    }
 
     const initial = methods.map((m, i) => ({
       mode:       m.mode_of_payment,
