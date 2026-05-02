@@ -21,10 +21,13 @@ export default function AddItemBar() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  // Auto-refocus after ItemDialog closes so cashier can keep scanning immediately
+  // Auto-refocus after ItemDialog closes — clear picker so it doesn't reappear
   useEffect(() => {
     if (!itemDialog) {
-      setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select() }, 80)
+      setShow(false)
+      setResults([])
+      setQuery('')
+      setTimeout(() => { inputRef.current?.focus() }, 80)
     }
   }, [itemDialog])
 

@@ -38,10 +38,13 @@ export default function ItemGrid() {
       .finally(() => setLoadingStock(false))
   }, [warehouse])
 
-  // Auto-refocus search after ItemDialog closes
+  // Auto-refocus search after ItemDialog closes — clear picker so it doesn't reappear
   useEffect(() => {
     if (!itemDialog) {
-      setTimeout(() => { searchRef.current?.focus(); searchRef.current?.select() }, 80)
+      setShowPicker(false)
+      setPickerResults([])
+      setSearchQuery('')
+      setTimeout(() => { searchRef.current?.focus() }, 80)
     }
   }, [itemDialog])
 
