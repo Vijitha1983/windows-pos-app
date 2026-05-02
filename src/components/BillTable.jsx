@@ -106,7 +106,7 @@ export default function BillTable() {
                 <th className="px-2 py-2.5 text-center text-xs font-semibold text-gray-400 w-20">Qty</th>
                 <th className="px-2 py-2.5 text-right text-xs font-semibold text-gray-400 w-24">Unit Price</th>
                 <th className="px-2 py-2.5 text-right text-xs font-semibold text-gray-400 w-24">Amount</th>
-                <th className="w-7"></th>
+                <th className="w-10"></th>
               </tr>
             </thead>
             <tbody>
@@ -180,10 +180,11 @@ export default function BillTable() {
                   </td>
 
                   {/* Remove */}
-                  <td className="px-1 py-2.5 text-center">
+                  <td className="px-1.5 py-2.5 text-center">
                     <button
                       onClick={(e) => { e.stopPropagation(); removeItem(item.id) }}
-                      className="w-5 h-5 flex items-center justify-center rounded text-gray-600 hover:text-red-400 hover:bg-red-900/30 transition-colors text-base leading-none"
+                      title="Remove item (Del)"
+                      className="w-7 h-7 flex items-center justify-center rounded-lg bg-red-900/50 text-red-400 hover:bg-red-700 hover:text-white active:bg-red-800 transition-colors text-base font-bold leading-none"
                     >
                       ×
                     </button>
