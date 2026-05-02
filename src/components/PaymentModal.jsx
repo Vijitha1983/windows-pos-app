@@ -26,6 +26,7 @@ export default function PaymentModal() {
   const [giftAccResolving,   setGiftAccResolving]   = useState(false)
   const [cashAccount,        setCashAccount]        = useState(null)         // GL account for cash payments
   const [bankAccount,        setBankAccount]        = useState(null)         // GL account for card/bank payments
+  const [kokoAccount,        setKokoAccount]        = useState(null)         // GL account for Koko Pay
   const containerRef   = useRef(null)
   const inputRefs      = useRef([])
   const giftVoucherRef = useRef(null)
@@ -62,6 +63,7 @@ export default function PaymentModal() {
     window.electronAPI.storeGet('giftModeName').then((name) => setGiftModeName(name || 'Gift Card'))
     window.electronAPI.storeGet('cashAccount').then((v) => setCashAccount(v || null))
     window.electronAPI.storeGet('bankAccount').then((v) => setBankAccount(v || null))
+    window.electronAPI.storeGet('kokoAccount').then((v) => setKokoAccount(v || null))
 
     setTimeout(() => {
       containerRef.current?.focus()
@@ -134,6 +136,10 @@ export default function PaymentModal() {
       }
       if (!inText && e.key.toLowerCase() === 'd') {
         const i = payments.findIndex((p) => p.mode.toLowerCase().includes('card'))
+        if (i >= 0) { e.preventDefault(); setActiveIdx(i) }
+      }
+      if (!inText && e.key.toLowerCase() === 'k') {
+        const i = payments.findIndex((p) => p.mode.toLowerCase().includes('koko'))
         if (i >= 0) { e.preventDefault(); setActiveIdx(i) }
       }
       if (!inText && e.key.toLowerCase() === 'g') {
@@ -259,7 +265,8 @@ export default function PaymentModal() {
         .map((p) => {
           const isCash = p.mode.toLowerCase().includes('cash')
           const isCard = p.mode.toLowerCase().includes('card') || p.mode.toLowerCase().includes('bank')
-          const account = isCash ? cashAccount : isCard ? bankAccount : null
+          const isKoko = p.mode.toLowerCase().includes('koko')
+          const account = isCash ? cashAccount : isCard ? bankAccount : isKoko ? kokoAccount : null
           return {
             mode_of_payment: p.mode,
             amount: p.amount,
@@ -493,7 +500,8 @@ export default function PaymentModal() {
               {payments.map((p, idx) => {
                 const isCash   = p.mode.toLowerCase().includes('cash')
                 const isCard   = p.mode.toLowerCase().includes('card')
-                const isGift   = !isCash && !isCard && (
+                const isKoko   = p.mode.toLowerCase().includes('koko')
+                const isGift   = !isCash && !isCard && !isKoko && (
                   p.mode.toLowerCase().includes('gift') ||
                   p.mode.toLowerCase().includes('voucher') ||
                   p.mode === giftModeName
@@ -512,7 +520,7 @@ export default function PaymentModal() {
                   >
                     <div className="flex items-center gap-3 px-4 py-3">
                       <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                        isCash ? 'bg-green-800/60' : isCard ? 'bg-blue-800/60' : isGift ? 'bg-purple-800/60' : 'bg-gray-600/60'
+                        isCash ? 'bg-green-800/60' : isCard ? 'bg-blue-800/60' : isKoko ? 'bg-orange-800/60' : isGift ? 'bg-purple-800/60' : 'bg-gray-600/60'
                       }`}>
                         {isCash ? (
                           <svg className="w-4 h-4 text-green-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -521,6 +529,10 @@ export default function PaymentModal() {
                         ) : isCard ? (
                           <svg className="w-4 h-4 text-blue-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                          </svg>
+                        ) : isKoko ? (
+                          <svg className="w-4 h-4 text-orange-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2v-2a2 2 0 00-2-2H8a2 2 0 00-2 2v2a2 2 0 002 2zM12 3v1m0 0a4 4 0 014 4c0 1.5-.5 2.5-1.5 3.5S13 13 13 14h-2c0-1 .5-1.5 1.5-2.5S14 9.5 14 8a2 2 0 10-4 0c0 1.5.5 2.5 1.5 3.5" />
                           </svg>
                         ) : isGift ? (
                           <svg className="w-4 h-4 text-purple-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -541,7 +553,7 @@ export default function PaymentModal() {
                           )}
                         </div>
                         <div className="text-xs text-gray-500 mt-0.5">
-                          {isCash ? 'Key: C' : isCard ? 'Key: D' : ''}
+                          {isCash ? 'Key: C' : isCard ? 'Key: D' : isKoko ? 'Key: K' : ''}
                           {isCash && change > 0 && (
                             <span className="ml-2 text-yellow-400">Cash handed: {fmt(cashPaid)}</span>
                           )}

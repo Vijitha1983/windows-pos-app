@@ -14,14 +14,18 @@ export default function Settings({ onClose }) {
   // GL account selectors
   const [cashAccounts,       setCashAccounts]       = useState([])
   const [bankAccounts,       setBankAccounts]       = useState([])
+  const [kokoAccounts,       setKokoAccounts]       = useState([])
   const [loadingCash,        setLoadingCash]        = useState(false)
   const [loadingBank,        setLoadingBank]        = useState(false)
+  const [loadingKoko,        setLoadingKoko]        = useState(false)
   const [savedCashAccount,   setSavedCashAccount]   = useState('')
   const [savedBankAccount,   setSavedBankAccount]   = useState('')
+  const [savedKokoAccount,   setSavedKokoAccount]   = useState('')
 
   useEffect(() => {
     window.electronAPI.storeGet('cashAccount').then((v) => setSavedCashAccount(v || ''))
     window.electronAPI.storeGet('bankAccount').then((v) => setSavedBankAccount(v || ''))
+    window.electronAPI.storeGet('kokoAccount').then((v) => setSavedKokoAccount(v || ''))
   }, [])
 
   async function loadCashAccounts() {
@@ -40,6 +44,21 @@ export default function Settings({ onClose }) {
       setBankAccounts(list)
     } catch {}
     setLoadingBank(false)
+  }
+
+  async function loadKokoAccounts() {
+    setLoadingKoko(true)
+    try {
+      const list = await getGLAccounts('Bank', store.posProfileData?.company)
+      setKokoAccounts(list)
+    } catch {}
+    setLoadingKoko(false)
+  }
+
+  async function selectKokoAccount(name) {
+    await window.electronAPI.storeSet('kokoAccount', name)
+    setSavedKokoAccount(name)
+    setSaved(true); setTimeout(() => setSaved(false), 1500)
   }
 
   async function selectCashAccount(name) {
@@ -247,6 +266,40 @@ export default function Settings({ onClose }) {
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                           savedBankAccount === a.name
                             ? 'bg-green-700 text-white'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        }`}
+                      >
+                        {a.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Koko Pay GL Account */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-gray-400 text-sm">Koko Pay — GL Account</h4>
+                  <button
+                    onClick={loadKokoAccounts}
+                    disabled={loadingKoko}
+                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                  >
+                    {loadingKoko ? 'Loading…' : 'Load accounts'}
+                  </button>
+                </div>
+                <div className="bg-gray-700/50 rounded-lg px-4 py-2 text-sm text-white mb-2">
+                  Current: <span className="text-orange-400">{savedKokoAccount || <span className="text-gray-500">Not set</span>}</span>
+                </div>
+                {kokoAccounts.length > 0 && (
+                  <div className="space-y-1 max-h-36 overflow-y-auto">
+                    {kokoAccounts.map((a) => (
+                      <button
+                        key={a.name}
+                        onClick={() => selectKokoAccount(a.name)}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                          savedKokoAccount === a.name
+                            ? 'bg-orange-700 text-white'
                             : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                         }`}
                       >
