@@ -7,7 +7,7 @@ export default function ItemGrid() {
   const {
     items, setItems, itemGroups, selectedGroup, setSelectedGroup,
     searchQuery, setSearchQuery, showImages,
-    openItemDialog, posProfileData,
+    openItemDialog, posProfileData, itemDialog,
   } = usePOSStore()
 
   const [loading, setLoading]           = useState(false)
@@ -37,6 +37,13 @@ export default function ItemGrid() {
       .catch(() => {})
       .finally(() => setLoadingStock(false))
   }, [warehouse])
+
+  // Auto-refocus search after ItemDialog closes
+  useEffect(() => {
+    if (!itemDialog) {
+      setTimeout(() => { searchRef.current?.focus(); searchRef.current?.select() }, 80)
+    }
+  }, [itemDialog])
 
   // Focus search on F1 / Ctrl+F
   useEffect(() => {
