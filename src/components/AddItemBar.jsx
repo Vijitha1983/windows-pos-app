@@ -4,13 +4,29 @@ import { getItem, searchItems } from '../services/api'
 import { cacheGet, cacheSet } from '../services/cache'
 
 export default function AddItemBar() {
-  const { openItemDialog } = usePOSStore()
+  const { openItemDialog, itemDialog } = usePOSStore()
   const [query,   setQuery]   = useState('')
   const [results, setResults] = useState([])
   const [idx,     setIdx]     = useState(0)
   const [show,    setShow]    = useState(false)
   const [loading, setLoading] = useState(false)
   const inputRef = useRef(null)
+
+  // F1 focuses this bar (mirrors ItemGrid behaviour when items panel is hidden)
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'F1') { e.preventDefault(); inputRef.current?.focus(); inputRef.current?.select() }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
+  // Auto-refocus after ItemDialog closes so cashier can keep scanning immediately
+  useEffect(() => {
+    if (!itemDialog) {
+      setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select() }, 80)
+    }
+  }, [itemDialog])
 
   // Fetch results when query changes
   useEffect(() => {
@@ -59,7 +75,7 @@ export default function AddItemBar() {
         <input
           ref={inputRef}
           type="text"
-          placeholder="Add item — search by name, code or scan barcode…"
+          placeholder="Add item — search by name, code or scan barcode… (F1)"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
