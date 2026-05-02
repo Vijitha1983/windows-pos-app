@@ -14,6 +14,7 @@ export default function POSMain() {
   const store = usePOSStore()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [queueCount, setQueueCount]     = useState(0)
+  const [itemsHidden, setItemsHidden]   = useState(false)
   const now = new Date()
 
   // Poll offline queue count
@@ -184,6 +185,13 @@ export default function POSMain() {
         {/* Right: controls */}
         <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' }}>
           <button
+            onClick={() => setItemsHidden((v) => !v)}
+            className={`px-2 py-1 rounded text-xs transition-colors ${itemsHidden ? 'bg-amber-700 text-amber-200' : 'bg-gray-700 text-gray-400 hover:text-white'}`}
+            title="Toggle item grid panel"
+          >
+            {itemsHidden ? 'Show Items' : 'Hide Items'}
+          </button>
+          <button
             onClick={() => store.setShowImages(!store.showImages)}
             className={`px-2 py-1 rounded text-xs transition-colors ${store.showImages ? 'bg-blue-700 text-blue-200' : 'bg-gray-700 text-gray-400 hover:text-white'}`}
           >
@@ -222,10 +230,12 @@ export default function POSMain() {
 
       {/* ── Main content ─────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex flex-col border-r border-gray-700" style={{ width: '60%' }}>
-          <ItemGrid />
-        </div>
-        <div className="flex flex-col" style={{ width: '40%' }}>
+        {!itemsHidden && (
+          <div className="flex flex-col border-r border-gray-700" style={{ width: '60%' }}>
+            <ItemGrid />
+          </div>
+        )}
+        <div className="flex flex-col" style={{ width: itemsHidden ? '100%' : '40%' }}>
           <div className="px-4 py-2.5 bg-gray-800 border-b border-gray-700 flex items-center justify-between">
             <h2 className="text-white font-semibold text-sm">Current Bill</h2>
             <span className="text-xs text-gray-500">{store.currentBill.items.length} items</span>

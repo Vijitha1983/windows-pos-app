@@ -14,8 +14,6 @@ export default function ItemGrid() {
   const [loadingItem, setLoadingItem]   = useState(null)
   const [errorMsg, setErrorMsg]         = useState('')
   const [focusedIdx, setFocusedIdx]     = useState(-1)
-  const [hiddenItems, setHiddenItems]   = useState(new Set())
-  const [showHidden, setShowHidden]     = useState(false)
   const [stockMap, setStockMap]         = useState({})
   const [loadingStock, setLoadingStock] = useState(false)
   const [pickerResults, setPickerResults] = useState([])
@@ -26,11 +24,6 @@ export default function ItemGrid() {
   const gridRef   = useRef(null)
 
   const warehouse = posProfileData?.warehouse
-
-  // Load hidden items on mount
-  useEffect(() => {
-    window.electronAPI.storeGet('hiddenItems').then((v) => setHiddenItems(new Set(v || [])))
-  }, [])
 
   // Load stock when warehouse is known
   useEffect(() => {
@@ -182,15 +175,6 @@ export default function ItemGrid() {
     return () => window.removeEventListener('keypress', handler)
   }, [])
 
-  async function toggleHideItem(e, item_code) {
-    e.stopPropagation()
-    e.preventDefault()
-    const next = new Set(hiddenItems)
-    if (next.has(item_code)) { next.delete(item_code) } else { next.add(item_code) }
-    setHiddenItems(next)
-    await window.electronAPI.storeSet('hiddenItems', [...next])
-  }
-
   function handleSearchKeyDown(e) {
     if (!showPicker || pickerResults.length === 0) return
     if (e.key === 'ArrowDown') {
@@ -207,8 +191,6 @@ export default function ItemGrid() {
       setSearchQuery('')
     }
   }
-
-  const displayItems = showHidden ? items : items.filter((item) => !hiddenItems.has(item.item_code))
 
   return (
     <div className="flex flex-col h-full">
@@ -287,18 +269,6 @@ export default function ItemGrid() {
             {grp}
           </button>
         ))}
-        {hiddenItems.size > 0 && (
-          <button
-            onClick={() => setShowHidden((v) => !v)}
-            className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ml-auto ${
-              showHidden
-                ? 'bg-amber-600 text-white'
-                : 'bg-gray-700/60 text-amber-500 border border-amber-700/50 hover:bg-gray-600'
-            }`}
-          >
-            {showHidden ? `Hide hidden (${hiddenItems.size})` : `${hiddenItems.size} hidden`}
-          </button>
-        )}
       </div>
 
       {/* Error toast */}
@@ -324,9 +294,9 @@ export default function ItemGrid() {
             </svg>
             Loading items…
           </div>
-        ) : displayItems.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="flex items-center justify-center h-32 text-gray-500 text-sm">
-            {hiddenItems.size > 0 && !showHidden ? 'All items hidden — click the amber button to show' : 'No items found'}
+            No items found
           </div>
         ) : (
           <div
@@ -334,10 +304,9 @@ export default function ItemGrid() {
             className="grid gap-2"
             style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))' }}
           >
-            {displayItems.map((item, idx) => {
+            {items.map((item, idx) => {
               const isFetching = loadingItem === item.item_code
               const isFocused  = focusedIdx === idx
-              const isHidden   = hiddenItems.has(item.item_code)
               const qty        = stockMap[item.item_code]
               const hasStock   = !loadingStock && qty !== undefined
 
@@ -350,24 +319,9 @@ export default function ItemGrid() {
                   className={`relative text-left rounded-xl p-3 transition-all border-2 ${
                     isFocused
                       ? 'border-blue-500 bg-blue-900/30 shadow-lg shadow-blue-900/20'
-                      : isHidden
-                        ? 'border-dashed border-amber-700/50 bg-gray-800/60 opacity-70'
-                        : 'border-transparent bg-gray-700 hover:bg-gray-600 hover:border-gray-500'
+                      : 'border-transparent bg-gray-700 hover:bg-gray-600 hover:border-gray-500'
                   } ${loadingItem && !isFetching ? 'opacity-50' : ''}`}
                 >
-                  {/* Always-visible hide/unhide button */}
-                  <span
-                    onClick={(e) => toggleHideItem(e, item.item_code)}
-                    title={isHidden ? 'Show item' : 'Hide item'}
-                    className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-xs leading-none z-10 cursor-pointer select-none transition-colors ${
-                      isHidden
-                        ? 'bg-amber-600 text-white'
-                        : 'bg-gray-600 text-gray-400 hover:bg-red-700 hover:text-white'
-                    }`}
-                  >
-                    {isHidden ? '↩' : '−'}
-                  </span>
-
                   {/* Loading overlay */}
                   {isFetching && (
                     <div className="absolute inset-0 bg-gray-900/60 rounded-xl flex items-center justify-center">
@@ -387,7 +341,7 @@ export default function ItemGrid() {
                     />
                   )}
 
-                  <div className="text-white text-xs font-semibold leading-tight line-clamp-2 pr-5">
+                  <div className="text-white text-xs font-semibold leading-tight line-clamp-2">
                     {item.item_name}
                   </div>
                   <div className="text-gray-500 text-xs mt-0.5">{item.item_code}</div>
