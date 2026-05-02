@@ -109,6 +109,22 @@ export async function resolveGiftCardAccount(modeName, company, accountShortName
   return null
 }
 
+// ─── Stock Balance ───────────────────────────────────────────────────────────
+
+// Fetches all Bin records for a warehouse and returns a map of item_code → actual_qty.
+// Used by ItemGrid to display stock on each item card.
+export async function getWarehouseStock(warehouse) {
+  if (!warehouse) return {}
+  const data = await request('GET', '/api/resource/Bin' + qs({
+    filters:          JSON.stringify([['warehouse', '=', warehouse]]),
+    fields:           JSON.stringify(['item_code', 'actual_qty']),
+    limit_page_length: 2000,
+  }))
+  const map = {}
+  for (const b of data.data || []) { map[b.item_code] = b.actual_qty ?? 0 }
+  return map
+}
+
 // ─── GL Accounts ─────────────────────────────────────────────────────────────
 
 // Fetches leaf GL accounts filtered by account_type ('Cash', 'Bank', etc.)
