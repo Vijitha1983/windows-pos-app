@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { getTodayInvoiceSummary, closePOSSession } from '../services/api'
+import { getTodayInvoiceSummary, closePOSSession, getCategoryWiseSales } from '../services/api'
 
 export default function SalesSummaryModal() {
   const {
@@ -10,11 +10,13 @@ export default function SalesSummaryModal() {
     setShowOpeningModal,
   } = usePOSStore()
 
-  const [loading,  setLoading]  = useState(false)
-  const [summary,  setSummary]  = useState(null)   // { invoices, totalSales, byMode, count }
-  const [closing,  setClosing]  = useState(false)
-  const [closeErr, setCloseErr] = useState('')
-  const [closed,   setClosed]   = useState(false)  // session successfully closed
+  const [loading,      setLoading]      = useState(false)
+  const [summary,      setSummary]      = useState(null)   // { invoices, totalSales, byMode, count }
+  const [byCategory,   setByCategory]   = useState({})     // { item_group: amount }
+  const [loadingCats,  setLoadingCats]  = useState(false)
+  const [closing,      setClosing]      = useState(false)
+  const [closeErr,     setCloseErr]     = useState('')
+  const [closed,       setClosed]       = useState(false)
   const containerRef = useRef(null)
 
   useEffect(() => {
@@ -31,9 +33,20 @@ export default function SalesSummaryModal() {
     try {
       const data = await getTodayInvoiceSummary(posProfile, sessionStartDate)
       setSummary(data)
+      // Load category breakdown from invoice items
+      if (data.invoices?.length > 0) {
+        setLoadingCats(true)
+        getCategoryWiseSales(data.invoices.map((i) => i.name))
+          .then((cats) => setByCategory(cats))
+          .catch(() => setByCategory({}))
+          .finally(() => setLoadingCats(false))
+      } else {
+        setByCategory({})
+      }
     } catch (err) {
       console.error('Summary fetch failed:', err)
       setSummary({ invoices: [], totalSales: 0, byMode: {}, count: 0 })
+      setByCategory({})
     } finally {
       setLoading(false)
     }
@@ -83,14 +96,16 @@ export default function SalesSummaryModal() {
   const hasBreakdown = Object.keys(byMode).length > 0
   const cashKey    = Object.keys(byMode).find((k) => k.toLowerCase().includes('cash'))   || null
   const cardKey    = Object.keys(byMode).find((k) => k.toLowerCase().includes('card'))   || null
+  const kokoKey    = Object.keys(byMode).find((k) => k.toLowerCase().includes('koko'))   || null
   const voucherKey = Object.keys(byMode).find(
     (k) => k.toLowerCase().includes('gift') || k.toLowerCase().includes('voucher')
   ) || null
   const cashSales    = cashKey    ? (byMode[cashKey]    || 0) : 0
   const cardSales    = cardKey    ? (byMode[cardKey]    || 0) : 0
+  const kokoSales    = kokoKey    ? (byMode[kokoKey]    || 0) : 0
   const voucherSales = voucherKey ? (byMode[voucherKey] || 0) : 0
   const otherModes = Object.entries(byMode).filter(
-    ([k]) => k !== cashKey && k !== cardKey && k !== voucherKey
+    ([k]) => k !== cashKey && k !== cardKey && k !== kokoKey && k !== voucherKey
   )
 
   // Cashier figures
@@ -226,6 +241,26 @@ export default function SalesSummaryModal() {
                     </span>
                   </div>
 
+                  {/* Koko Pay Sales */}
+                  <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-700/40">
+                    <div className="flex items-center gap-2.5 pl-4">
+                      <div className="w-2 h-2 rounded-full bg-orange-400" />
+                      <span className="text-gray-400 text-sm">
+                        Koko Pay
+                        {hasBreakdown && summary.totalSales > 0 && kokoSales > 0 && (
+                          <span className="ml-2 text-gray-600 text-xs">
+                            ({((kokoSales / summary.totalSales) * 100).toFixed(0)}%)
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <span className="font-semibold tabular-nums text-sm">
+                      {hasBreakdown
+                        ? <span className="text-orange-400">{fmt(kokoSales)}</span>
+                        : <span className="text-gray-600 text-xs">—</span>}
+                    </span>
+                  </div>
+
                   {/* Gift Voucher Sales */}
                   <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-700/40">
                     <div className="flex items-center gap-2.5 pl-4">
@@ -333,6 +368,47 @@ export default function SalesSummaryModal() {
                     </div>
                     <span className="text-amber-300 font-bold text-xl tabular-nums">{fmt(totalInCashier)}</span>
                   </div>
+                </div>
+              </section>
+
+              {/* ══ CATEGORY WISE SALES ══ */}
+              <section>
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-1 h-5 rounded-full bg-teal-500" />
+                  <h3 className="text-white font-bold text-sm uppercase tracking-wider">Category Wise Sales</h3>
+                  {loadingCats && (
+                    <svg className="w-3.5 h-3.5 animate-spin text-gray-500 ml-1" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                    </svg>
+                  )}
+                </div>
+
+                <div className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden">
+                  {Object.keys(byCategory).length === 0 ? (
+                    <div className="px-5 py-5 text-center text-gray-500 text-sm">
+                      {loadingCats ? 'Loading…' : summary.count === 0 ? 'No sales today' : 'Category data unavailable'}
+                    </div>
+                  ) : (
+                    Object.entries(byCategory)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([group, amount], i, arr) => {
+                        const pct = summary.totalSales > 0 ? ((amount / summary.totalSales) * 100).toFixed(0) : 0
+                        return (
+                          <div
+                            key={group}
+                            className={`flex items-center justify-between px-5 py-3.5 ${i < arr.length - 1 ? 'border-b border-gray-700/40' : ''}`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-2 h-2 rounded-full bg-teal-500 flex-shrink-0" />
+                              <span className="text-gray-300 text-sm">{group}</span>
+                              <span className="text-gray-600 text-xs">{pct}%</span>
+                            </div>
+                            <span className="text-teal-400 font-semibold tabular-nums text-sm">{fmt(amount)}</span>
+                          </div>
+                        )
+                      })
+                  )}
                 </div>
               </section>
             </>

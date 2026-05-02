@@ -4,6 +4,7 @@ import { getItemGroups, getOpenPOSSession } from '../services/api'
 import { cacheGet, cacheSet, getQueuedInvoices } from '../services/cache'
 import ItemGrid from './ItemGrid'
 import BillTable from './BillTable'
+import AddItemBar from './AddItemBar'
 import ItemDialog from './ItemDialog'
 import PaymentModal from './PaymentModal'
 import POSOpeningModal from './POSOpeningModal'
@@ -236,10 +237,11 @@ export default function POSMain() {
           </div>
         )}
         <div className="flex flex-col" style={{ width: itemsHidden ? '100%' : '40%' }}>
-          <div className="px-4 py-2.5 bg-gray-800 border-b border-gray-700 flex items-center justify-between">
+          <div className="px-4 py-2.5 bg-gray-800 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
             <h2 className="text-white font-semibold text-sm">Current Bill</h2>
             <span className="text-xs text-gray-500">{store.currentBill.items.length} items</span>
           </div>
+          {itemsHidden && <AddItemBar />}
           <BillTable />
         </div>
       </div>

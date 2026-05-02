@@ -109,6 +109,31 @@ export async function resolveGiftCardAccount(modeName, company, accountShortName
   return null
 }
 
+// ─── Category Wise Sales ─────────────────────────────────────────────────────
+
+// Returns { [item_group]: total_amount } for the given POS invoice names.
+// Tries POS Invoice Item first; falls back to Sales Invoice Item.
+export async function getCategoryWiseSales(invoiceNames) {
+  if (!invoiceNames || invoiceNames.length === 0) return {}
+  const tryFetch = async (doctype, extraFilter = []) => {
+    const data = await request('GET', `/api/resource/${doctype}` + qs({
+      filters: JSON.stringify([['parent', 'in', invoiceNames], ...extraFilter]),
+      fields: JSON.stringify(['item_group', 'amount']),
+      limit_page_length: 5000,
+    }))
+    const map = {}
+    for (const row of data.data || []) {
+      if (row.item_group && row.amount > 0) {
+        map[row.item_group] = (map[row.item_group] || 0) + row.amount
+      }
+    }
+    return map
+  }
+  try { return await tryFetch('POS Invoice Item') } catch {}
+  try { return await tryFetch('Sales Invoice Item', [['parenttype', '=', 'POS Invoice']]) } catch {}
+  return {}
+}
+
 // ─── Stock Balance ───────────────────────────────────────────────────────────
 
 // Fetches all Bin records for a warehouse and returns a map of item_code → actual_qty.
