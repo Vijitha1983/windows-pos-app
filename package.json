@@ -2,12 +2,14 @@
   "name": "erpnext-pos",
   "version": "1.0.0",
   "description": "ERPNext POS Desktop Application",
+  "author": "Vijitha Rajapaksha",
   "main": "electron/main.js",
   "scripts": {
     "dev": "kill-port 5173 & concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "electron": "electron .",
     "dist": "vite build && electron-builder",
+    "dist:dir": "vite build && electron-builder --dir",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -33,23 +35,39 @@
     "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.erpnext.pos",
+    "appId": "com.hsp.erpnext.pos",
     "productName": "ERPNext POS",
-    "win": {
-      "target": "nsis",
-      "icon": "public/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    },
+    "copyright": "Copyright © 2025 Vijitha Rajapaksha",
+    "asar": true,
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "node_modules/**/*"
+      "package.json"
     ],
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "public"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "public/icon.ico",
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ERPNext POS",
+      "installerIcon": "public/icon.ico",
+      "uninstallerIcon": "public/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "license": null
     }
   }
 }
