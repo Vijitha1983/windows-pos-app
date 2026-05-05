@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { getItemGroups, getOpenPOSSession } from '../services/api'
+import { getItemGroups, getItems, getOpenPOSSession, getWarehouseStock } from '../services/api'
 import { signOut } from '../services/auth'
-import { cacheGet, cacheSet, getQueuedInvoices } from '../services/cache'
+import { cacheGet, cacheSet, cacheClear, getQueuedInvoices } from '../services/cache'
 import ItemGrid from './ItemGrid'
 import BillTable from './BillTable'
 import AddItemBar from './AddItemBar'
@@ -17,7 +17,52 @@ export default function POSMain() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [queueCount, setQueueCount]     = useState(0)
   const [itemsHidden, setItemsHidden]   = useState(false)
+  const [syncProgress, setSyncProgress] = useState(0)
+  const [syncError, setSyncError]       = useState('')
   const now = new Date()
+
+  async function handleSync() {
+    if (store.syncStatus === 'syncing') return
+    store.setSyncStatus('syncing')
+    setSyncProgress(0)
+    setSyncError('')
+    try {
+      // Wipe all in-memory caches so every fetch below is fresh
+      cacheClear()
+      setSyncProgress(10)
+
+      // Step 1: item groups
+      const groups = await getItemGroups()
+      store.setItemGroups(groups)
+      cacheSet('itemGroups', groups)
+      setSyncProgress(33)
+
+      // Step 2: items for current group
+      const filters = store.selectedGroup !== 'All' ? { itemGroup: store.selectedGroup } : {}
+      const data = await getItems(filters, 100)
+      store.setItems(data)
+      cacheSet(`items:${store.selectedGroup}:`, data)
+      setSyncProgress(66)
+
+      // Step 3: warehouse stock (ItemGrid re-fetches via syncVersion bump)
+      const warehouse = store.posProfileData?.warehouse
+      if (warehouse) {
+        const map = await getWarehouseStock(warehouse)
+        cacheSet(`stock:${warehouse}`, map)
+      }
+      setSyncProgress(100)
+
+      // Bump syncVersion — clears soldInSession and triggers ItemGrid stock reload
+      store.incrementSyncVersion()
+      store.setSyncStatus('done')
+      setTimeout(() => store.setSyncStatus('idle'), 2000)
+    } catch (err) {
+      const msg = err?.message || 'Network error'
+      setSyncError(msg)
+      store.setSyncStatus('error')
+      setTimeout(() => store.setSyncStatus('idle'), 3000)
+    }
+  }
 
   // Poll offline queue count
   useEffect(() => {
@@ -91,18 +136,24 @@ export default function POSMain() {
       const tag = document.activeElement?.tagName
       const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 
-      if (e.key === 'F5') {
+      if (e.key === 'F2') {
+        e.preventDefault()
+        handleSync()
+      } else if (e.key === 'F5') {
         e.preventDefault()
         store.setShowSummaryModal(true)
+      } else if (e.key === 'F7') {
+        e.preventDefault()
+        store.toggleBillType()
+      } else if (e.key === 'F8') {
+        e.preventDefault()
+        store.toggleBillPaymentType()
       } else if (e.key === 'F12') {
         e.preventDefault()
         if (store.currentBill.items.length > 0) store.openPaymentModal()
       } else if (e.key === 'F1' && !inInput) {
         e.preventDefault()
         store.newBill()
-      } else if (e.key === 'F2') {
-        e.preventDefault()
-        store.holdBill()
       } else if (e.key === 'F4') {
         e.preventDefault()
         store.newBill()
@@ -113,7 +164,7 @@ export default function POSMain() {
   }, [
     store.itemDialog, store.paymentModal,
     store.showOpeningModal, store.showSummaryModal, settingsOpen,
-    store.currentBill.items.length,
+    store.currentBill.items.length, store.syncStatus,
   ])
 
   // Online/offline detection
@@ -141,7 +192,7 @@ export default function POSMain() {
         <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' }}>
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-            <span className="text-white font-semibold text-sm">ERPNext POS</span>
+            <span className="text-white font-semibold text-sm">{store.posProfileData?.company || 'POS'}</span>
           </div>
           <div className="text-gray-600">|</div>
           <span className="text-gray-400 text-xs">{store.posProfile}</span>
@@ -177,6 +228,35 @@ export default function POSMain() {
               <span className="text-amber-400 text-xs">No Session</span>
             </button>
           )}
+          {/* Sync / Reload button */}
+          <button
+            onClick={handleSync}
+            disabled={store.syncStatus === 'syncing'}
+            title="Reload prices, items & stock from server (F2)"
+            className={`flex items-center gap-1.5 rounded px-2 py-0.5 border text-xs transition-colors ${
+              store.syncStatus === 'syncing'
+                ? 'bg-blue-900/50 border-blue-600 text-blue-300 cursor-not-allowed'
+                : store.syncStatus === 'done'
+                ? 'bg-green-900/40 border-green-600 text-green-300'
+                : store.syncStatus === 'error'
+                ? 'bg-red-900/40 border-red-600 text-red-300'
+                : 'bg-gray-700/60 border-gray-600 text-gray-400 hover:text-white hover:border-gray-400'
+            }`}
+          >
+            <svg
+              className={`w-3 h-3 ${store.syncStatus === 'syncing' ? 'animate-spin' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span>
+              {store.syncStatus === 'syncing' ? `${syncProgress}%`
+                : store.syncStatus === 'done'  ? 'Synced'
+                : store.syncStatus === 'error' ? 'Sync failed'
+                : 'F2 Sync'}
+            </span>
+          </button>
         </div>
 
         {/* Center */}
@@ -184,7 +264,7 @@ export default function POSMain() {
           <span>{now.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</span>
           <span>|</span>
           <div className="flex items-center gap-1.5">
-            <span className="text-white">{store.username}</span>
+            <span className="text-white">{store.userFullName || store.username}</span>
             {store.sessionOpenedBy && store.sessionOpenedBy !== store.username && (
               <span className="text-amber-400 text-[10px]">(session by {store.sessionOpenedBy})</span>
             )}
@@ -262,9 +342,38 @@ export default function POSMain() {
           </div>
         )}
         <div className="flex flex-col" style={{ width: itemsHidden ? '100%' : '40%' }}>
-          <div className="px-4 py-2.5 bg-gray-800 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
+          <div className="px-4 py-2 bg-gray-800 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
             <h2 className="text-white font-semibold text-sm">Current Bill</h2>
-            <span className="text-xs text-gray-500">{store.currentBill.items.length} items</span>
+            <div className="flex items-center gap-2">
+              {/* Retail / Wholesale toggle (F7) */}
+              <button
+                onClick={store.toggleBillType}
+                title="Toggle Retail / Wholesale (F7)"
+                className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border transition-colors ${
+                  store.billType === 'Wholesale'
+                    ? 'bg-orange-900/50 border-orange-600 text-orange-300 hover:bg-orange-800/60'
+                    : 'bg-blue-900/50 border-blue-600 text-blue-300 hover:bg-blue-800/60'
+                }`}
+              >
+                <span>{store.billType === 'Wholesale' ? '⇄ Wholesale' : '⇄ Retail'}</span>
+                <span className="opacity-40 font-mono font-normal">F7</span>
+              </button>
+
+              {/* Cash / Credit toggle (F8) */}
+              <button
+                onClick={store.toggleBillPaymentType}
+                title="Toggle Cash / Credit payment (F8)"
+                className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border transition-colors ${
+                  store.billPaymentType === 'Credit'
+                    ? 'bg-amber-900/50 border-amber-600 text-amber-300 hover:bg-amber-800/60'
+                    : 'bg-green-900/50 border-green-700 text-green-300 hover:bg-green-800/60'
+                }`}
+              >
+                <span>{store.billPaymentType === 'Credit' ? '$ Credit' : '$ Cash'}</span>
+                <span className="opacity-40 font-mono font-normal">F8</span>
+              </button>
+              <span className="text-xs text-gray-500">{store.currentBill.items.length} items</span>
+            </div>
           </div>
           {itemsHidden && <AddItemBar />}
           <BillTable />
@@ -277,6 +386,28 @@ export default function POSMain() {
       <POSOpeningModal />
       <SalesSummaryModal />
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
+
+      {/* ── Sync lock overlay ────────────────────────────────────────── */}
+      {store.syncStatus === 'syncing' && (
+        <div className="fixed inset-0 z-50 bg-gray-950/90 flex flex-col items-center justify-center gap-6 select-none">
+          <svg className="w-12 h-12 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+          </svg>
+          <div className="text-center">
+            <p className="text-white font-semibold text-lg">Reloading data from server…</p>
+            <p className="text-gray-400 text-sm mt-1">Please wait, the POS will unlock shortly</p>
+          </div>
+          {/* Progress bar */}
+          <div className="w-72 bg-gray-700 rounded-full h-3 overflow-hidden">
+            <div
+              className="bg-blue-500 h-3 rounded-full transition-all duration-300"
+              style={{ width: `${syncProgress}%` }}
+            />
+          </div>
+          <span className="text-blue-300 font-mono text-sm">{syncProgress}%</span>
+        </div>
+      )}
     </div>
   )
 }

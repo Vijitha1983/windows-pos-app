@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { getItem, getItems, searchItems, getWarehouseStock } from '../services/api'
+import { getItem, getItems, searchItems, getWarehouseStock, getBaseURL } from '../services/api'
 import { cacheGet, cacheSet } from '../services/cache'
 
 export default function ItemGrid() {
   const {
     items, setItems, itemGroups, selectedGroup, setSelectedGroup,
     searchQuery, setSearchQuery, showImages,
-    openItemDialog, posProfileData, itemDialog,
+    openItemDialog, posProfileData, itemDialog, billType,
+    soldInSession, syncVersion,
   } = usePOSStore()
 
   const [loading, setLoading]           = useState(false)
@@ -25,7 +26,13 @@ export default function ItemGrid() {
 
   const warehouse = posProfileData?.warehouse
 
-  // Load stock when warehouse is known
+  function imgSrc(image) {
+    if (!image) return null
+    if (image.startsWith('http://') || image.startsWith('https://')) return image
+    return getBaseURL().replace(/\/$/, '') + image
+  }
+
+  // Load stock when warehouse is known, or when sync fires (syncVersion bumps)
   useEffect(() => {
     if (!warehouse) return
     const key = `stock:${warehouse}`
@@ -36,7 +43,7 @@ export default function ItemGrid() {
       .then((map) => { setStockMap(map); cacheSet(key, map) })
       .catch(() => {})
       .finally(() => setLoadingStock(false))
-  }, [warehouse])
+  }, [warehouse, syncVersion])
 
   // Auto-refocus search after ItemDialog closes — clear picker so it doesn't reappear
   useEffect(() => {
@@ -143,9 +150,13 @@ export default function ItemGrid() {
         full = await getItem(item.item_code)
         cacheSet(key, full)
       }
-      const levels = (full.custom_price_selling_levels || []).filter(
-        (l) => l.active === 1 || l.active === true || l.active === '1'
-      )
+      const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, '')
+      const levels = (full.custom_price_selling_levels || []).filter((l) => {
+        const isActive = l.active === 1 || l.active === true || l.active === '1'
+        if (!isActive) return false
+        if (!l.bill_type) return true
+        return norm(l.bill_type) === norm(billType)
+      })
       openItemDialog(full, levels)
     } catch (err) {
       showError('Could not load item: ' + (err.message || 'Network error'))
@@ -233,7 +244,8 @@ export default function ItemGrid() {
         {showPicker && pickerResults.length > 0 && (
           <div className="absolute left-4 right-4 top-full mt-1 z-30 bg-gray-800 border border-gray-600 rounded-xl shadow-2xl overflow-y-auto" style={{ maxHeight: '300px' }}>
             {pickerResults.map((item, idx) => {
-              const qty = stockMap[item.item_code]
+              const rawQty = stockMap[item.item_code]
+              const qty = rawQty !== undefined ? Math.max(0, rawQty - (soldInSession[item.item_code] || 0)) : undefined
               const hasStock = !loadingStock && qty !== undefined
               return (
                 <button
@@ -317,7 +329,8 @@ export default function ItemGrid() {
             {items.map((item, idx) => {
               const isFetching = loadingItem === item.item_code
               const isFocused  = focusedIdx === idx
-              const qty        = stockMap[item.item_code]
+              const rawQty     = stockMap[item.item_code]
+              const qty        = rawQty !== undefined ? Math.max(0, rawQty - (soldInSession[item.item_code] || 0)) : undefined
               const hasStock   = !loadingStock && qty !== undefined
 
               return (
@@ -344,7 +357,7 @@ export default function ItemGrid() {
 
                   {showImages && item.image && (
                     <img
-                      src={item.image}
+                      src={imgSrc(item.image)}
                       alt={item.item_name}
                       className="w-full h-20 object-cover rounded-lg mb-2"
                       onError={(e) => { e.target.style.display = 'none' }}

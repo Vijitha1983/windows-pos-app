@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
 import CustomerSearch from './CustomerSearch'
+import { getCustomerOutstandingInvoices } from '../services/api'
 
 export default function BillTable() {
   const {
@@ -16,6 +17,39 @@ export default function BillTable() {
   const [showHeld, setShowHeld] = useState(false)
   const editRef = useRef(null)
   const discountInputRef = useRef(null)
+
+  // Receivable aging
+  const [aging, setAging] = useState(null)
+  const [agingLoading, setAgingLoading] = useState(false)
+  const [showAgingDetail, setShowAgingDetail] = useState(false)
+
+  useEffect(() => {
+    const customer = currentBill.customer
+    if (!customer) { setAging(null); return }
+    let cancelled = false
+    setAgingLoading(true)
+    setAging(null)
+    getCustomerOutstandingInvoices(customer.name).then((invoices) => {
+      if (cancelled) return
+      const today = new Date(); today.setHours(0, 0, 0, 0)
+      const buckets = { current: 0, d30: 0, d60: 0, d90: 0, over90: 0, total: 0 }
+      const details = []
+      invoices.forEach((inv) => {
+        const due = new Date(inv.due_date || inv.posting_date)
+        const days = Math.floor((today - due) / 86400000)
+        const amt = parseFloat(inv.outstanding_amount || 0)
+        buckets.total += amt
+        if (days <= 0)       buckets.current += amt
+        else if (days <= 30) buckets.d30 += amt
+        else if (days <= 60) buckets.d60 += amt
+        else if (days <= 90) buckets.d90 += amt
+        else                 buckets.over90 += amt
+        details.push({ name: inv.name, due: inv.due_date || inv.posting_date, days, amt })
+      })
+      setAging({ buckets, details })
+    }).catch(() => setAging(null)).finally(() => { if (!cancelled) setAgingLoading(false) })
+    return () => { cancelled = true }
+  }, [currentBill.customer])
 
   const items = currentBill.items
   const subTotal = getSubTotal()
@@ -86,6 +120,58 @@ export default function BillTable() {
       <div className="px-3 py-2 border-b border-gray-700 flex-shrink-0">
         <CustomerSearch />
       </div>
+
+      {/* Receivable Aging — shown when a named customer is selected */}
+      {currentBill.customer && (
+        <div className="px-3 py-2 border-b border-gray-700 flex-shrink-0 bg-gray-850">
+          {agingLoading ? (
+            <div className="text-xs text-gray-500 text-center py-1">Loading receivables…</div>
+          ) : aging && aging.buckets.total > 0 ? (
+            <div>
+              <button
+                onClick={() => setShowAgingDetail((v) => !v)}
+                className="w-full text-left"
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs text-gray-400 font-medium">Receivable Aging</span>
+                  <span className="text-xs font-bold text-red-400 tabular-nums">
+                    Total: {fmt(aging.buckets.total)}
+                  </span>
+                </div>
+                <div className="grid grid-cols-5 gap-1 text-center">
+                  {[
+                    { label: 'Current', val: aging.buckets.current, color: 'text-green-400 bg-green-900/30 border-green-800' },
+                    { label: '1–30d',   val: aging.buckets.d30,     color: 'text-yellow-400 bg-yellow-900/30 border-yellow-800' },
+                    { label: '31–60d',  val: aging.buckets.d60,     color: 'text-orange-400 bg-orange-900/30 border-orange-800' },
+                    { label: '61–90d',  val: aging.buckets.d90,     color: 'text-red-400 bg-red-900/30 border-red-800' },
+                    { label: '90d+',    val: aging.buckets.over90,  color: 'text-red-300 bg-red-950/50 border-red-900' },
+                  ].map(({ label, val, color }) => (
+                    <div key={label} className={`rounded border px-1 py-0.5 ${color}`}>
+                      <div className="text-[9px] opacity-70 leading-none mb-0.5">{label}</div>
+                      <div className="text-[10px] font-bold tabular-nums leading-none">{fmt(val)}</div>
+                    </div>
+                  ))}
+                </div>
+              </button>
+              {showAgingDetail && aging.details.length > 0 && (
+                <div className="mt-2 max-h-32 overflow-y-auto space-y-0.5">
+                  {aging.details.map((d) => (
+                    <div key={d.name} className="flex justify-between text-[10px] text-gray-400 px-1">
+                      <span className="truncate flex-1 mr-2">{d.name}</span>
+                      <span className={`tabular-nums ${d.days > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                        {d.days > 0 ? `${d.days}d overdue` : 'current'}
+                      </span>
+                      <span className="tabular-nums ml-2 text-white font-medium">{fmt(d.amt)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : aging && aging.buckets.total === 0 ? (
+            <div className="text-xs text-green-500 text-center py-0.5">No outstanding receivables</div>
+          ) : null}
+        </div>
+      )}
 
       {/* ── Bill items table ─────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto min-h-0">
@@ -243,14 +329,13 @@ export default function BillTable() {
 
         {/* Row 1: Draft Save + Recall side by side */}
         <div className="grid grid-cols-2 gap-2">
-          {/* Draft Save (F2) — save current bill to drafts */}
+          {/* Draft Save — save current bill to drafts */}
           <button
             onClick={holdBill}
             disabled={items.length === 0}
             className="flex flex-col items-center justify-center bg-amber-700 hover:bg-amber-600 active:bg-amber-800 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-amber-100 rounded-xl py-2.5 px-3 transition-colors"
           >
-            <span className="font-mono text-xs opacity-60 leading-none">F2</span>
-            <span className="font-semibold text-sm mt-0.5">Draft Save</span>
+            <span className="font-semibold text-sm">Draft Save</span>
           </button>
 
           {/* Recall (F3) — load a saved draft */}

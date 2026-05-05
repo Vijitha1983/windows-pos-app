@@ -4,7 +4,7 @@ import { getItem, searchItems } from '../services/api'
 import { cacheGet, cacheSet } from '../services/cache'
 
 export default function AddItemBar() {
-  const { openItemDialog, itemDialog } = usePOSStore()
+  const { openItemDialog, itemDialog, billType } = usePOSStore()
   const [query,   setQuery]   = useState('')
   const [results, setResults] = useState([])
   const [idx,     setIdx]     = useState(0)
@@ -53,9 +53,13 @@ export default function AddItemBar() {
       const key = `item:${item.item_code}`
       let full = cacheGet(key)
       if (!full) { full = await getItem(item.item_code); cacheSet(key, full) }
-      const levels = (full.custom_price_selling_levels || []).filter(
-        (l) => l.active === 1 || l.active === true || l.active === '1'
-      )
+      const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, '')
+      const levels = (full.custom_price_selling_levels || []).filter((l) => {
+        const isActive = l.active === 1 || l.active === true || l.active === '1'
+        if (!isActive) return false
+        if (!l.bill_type) return true
+        return norm(l.bill_type) === norm(billType)
+      })
       openItemDialog(full, levels)
     } catch {}
     setLoading(false)

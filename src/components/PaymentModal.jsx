@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { createPOSInvoice, submitPOSInvoice, resolveGiftCardAccount, validateGiftVoucherSerial } from '../services/api'
+import { createPOSInvoice, submitPOSInvoice, createSalesInvoice, submitSalesInvoice, resolveGiftCardAccount, validateGiftVoucherSerial, searchDeliveredSerialNos } from '../services/api'
 import { queueInvoice } from '../services/cache'
 
 export default function PaymentModal() {
@@ -10,6 +10,8 @@ export default function PaymentModal() {
     currentBill, getGrandTotal, getDiscountAmount,
     newBill, isOnline,
     posOpeningEntry,
+    billPaymentType, setBillPaymentType,
+    addSoldToSession,
   } = usePOSStore()
 
   const grandTotal  = getGrandTotal()
@@ -32,9 +34,16 @@ export default function PaymentModal() {
   const giftVoucherRef = useRef(null)
   const serialRef      = useRef(null)
 
-  const [giftSerial,       setGiftSerial]       = useState('')
-  const [giftSerialStatus, setGiftSerialStatus] = useState(null) // null|'checking'|'valid'|'invalid'|'expired'
-  const [giftSerialData,   setGiftSerialData]   = useState(null)
+  const [giftSerial,         setGiftSerial]         = useState('')
+  const [giftSerialStatus,   setGiftSerialStatus]   = useState(null) // null|'checking'|'valid'|'invalid'|'expired'
+  const [giftSerialData,     setGiftSerialData]     = useState(null)
+  const [serialSuggestions,  setSerialSuggestions]  = useState([])
+  const [serialDropIdx,      setSerialDropIdx]      = useState(0)
+  const serialDebounce = useRef(null)
+
+  // Derive lowercase version for comparisons; driven by store so header F8 stays in sync
+  const paymentType    = billPaymentType === 'Credit' ? 'credit' : 'cash'
+  const setPaymentType = (t) => setBillPaymentType(t === 'credit' ? 'Credit' : 'Cash')
 
   // ── Init payment rows when modal opens ──────────────────────────────────
   useEffect(() => {
@@ -63,6 +72,8 @@ export default function PaymentModal() {
     setGiftSerial('')
     setGiftSerialStatus(null)
     setGiftSerialData(null)
+    setSerialSuggestions([])
+    setSerialDropIdx(0)
 
     // Load account settings
     window.electronAPI.storeGet('giftModeName').then((name) => setGiftModeName(name || 'Gift Card'))
@@ -81,6 +92,25 @@ export default function PaymentModal() {
       setTimeout(() => inputRefs.current[activeIdx]?.select(), 30)
     }
   }, [activeIdx])
+
+  // Debounced autocomplete search for delivered gift voucher serials
+  useEffect(() => {
+    clearTimeout(serialDebounce.current)
+    if (!giftSerial.trim() || giftSerialStatus === 'valid') {
+      setSerialSuggestions([])
+      return
+    }
+    serialDebounce.current = setTimeout(async () => {
+      try {
+        const results = await searchDeliveredSerialNos(giftSerial.trim())
+        setSerialSuggestions(results)
+        setSerialDropIdx(0)
+      } catch {
+        setSerialSuggestions([])
+      }
+    }, 220)
+    return () => clearTimeout(serialDebounce.current)
+  }, [giftSerial])
 
   // When gift card amount changes, auto-reduce cash so cash + gift = grand total.
   // This prevents the gift card from being treated as extra payment on top of cash.
@@ -111,7 +141,14 @@ export default function PaymentModal() {
   const totalPaid     = payments.reduce((s, p) => s + p.amount, 0) + giftAmt
   const effectivePaid = totalPaid - change
   const balanceDue    = parseFloat(Math.max(0, grandTotal - effectivePaid).toFixed(2))
-  const isFullyPaid   = balanceDue < 0.01
+
+  // Credit mode: requires a real named customer — not null and not the Walk-in default
+  const defaultCustomer = posProfileData?.customer || 'Walk-in Customer'
+  const creditCustomerValid = paymentType === 'credit' &&
+    !!currentBill.customer &&
+    currentBill.customer.name !== defaultCustomer &&
+    currentBill.customer.customer_name?.toLowerCase() !== 'walk-in customer'
+  const isFullyPaid = paymentType === 'credit' ? creditCustomerValid : balanceDue < 0.01
 
   // ── Keyboard handler ────────────────────────────────────────────────────
   function handleKeyDown(e) {
@@ -129,6 +166,11 @@ export default function PaymentModal() {
     if (e.key === 'Tab' && changeOverlay === null) {
       e.preventDefault()
       setActiveIdx((i) => (i + 1) % payments.length)
+      return
+    }
+    if (e.key === 'F8' && changeOverlay === null) {
+      e.preventDefault()
+      setPaymentType((t) => t === 'cash' ? 'credit' : 'cash')
       return
     }
     if (changeOverlay === null) {
@@ -183,6 +225,8 @@ export default function PaymentModal() {
     setGiftSerial('')
     setGiftSerialStatus(null)
     setGiftSerialData(null)
+    setSerialSuggestions([])
+    setSerialDropIdx(0)
     // Restore cash to cover the full bill again
     setPayments((prev) => {
       const cardTotal = prev
@@ -195,9 +239,18 @@ export default function PaymentModal() {
     })
   }
 
+  function parseDenomination(itemName) {
+    if (!itemName) return null
+    const match = (itemName || '').replace(/,/g, '').match(/[\d]+\.?\d*/)
+    if (!match) return null
+    const n = parseFloat(match[0])
+    return isNaN(n) || n <= 0 ? null : n
+  }
+
   async function validateSerial(serial) {
     const s = serial.trim()
     if (!s) return
+    setSerialSuggestions([])
     setGiftSerialStatus('checking')
     setGiftSerialData(null)
     try {
@@ -210,6 +263,11 @@ export default function PaymentModal() {
         setGiftSerialStatus('expired')
       } else {
         setGiftSerialStatus('valid')
+        // Auto-populate denomination if amount field is empty
+        if (!giftVoucher.amount) {
+          const denom = parseDenomination(data.item_name)
+          if (denom) setGiftVoucher((g) => ({ ...g, amount: String(denom) }))
+        }
       }
     } catch {
       setGiftSerialStatus('invalid')
@@ -300,8 +358,47 @@ export default function PaymentModal() {
       change_amount:  changeAmt || 0,
     }
 
-    // Link to the open POS session — required by ERPNext v14+ before submission
-    if (posOpeningEntry) doc.pos_opening_entry = posOpeningEntry
+    // Required by ERPNext v14+ — links the invoice to the session so SLEs are
+    // created immediately on submission rather than deferred to the closing entry.
+    doc.pos_opening_entry = posOpeningEntry
+
+    if (discountAmt > 0) {
+      doc.apply_discount_on = 'Grand Total'
+      doc.discount_amount   = discountAmt
+    }
+
+    return doc
+  }
+
+  // ── Build Sales Invoice payload for credit sales ─────────────────────────
+  function buildCreditInvoice() {
+    const today     = new Date().toISOString().split('T')[0]
+    const warehouse = posProfileData?.warehouse || ''
+
+    const items = currentBill.items.map((item) => {
+      const entry = {
+        item_code: item.item_code,
+        item_name: item.item_name,
+        qty:       item.qty,
+        rate:      item.unitPrice,
+        uom:       item.uom || 'Nos',
+        warehouse,
+      }
+      if (item.serial_no) entry.serial_no = item.serial_no
+      if (item.batch_no)  entry.batch_no  = item.batch_no
+      return entry
+    })
+
+    const doc = {
+      doctype:        'Sales Invoice',
+      company:        posProfileData?.company  || '',
+      currency:       posProfileData?.currency || 'LKR',
+      customer:       currentBill.customer.name,
+      posting_date:   today,
+      set_warehouse:  warehouse,
+      is_pos:         0,   // regular Sales Invoice — creates receivable automatically
+      items,
+    }
 
     if (discountAmt > 0) {
       doc.apply_discount_on = 'Grand Total'
@@ -326,10 +423,12 @@ export default function PaymentModal() {
         <td style="text-align:right;padding:2px 0;white-space:nowrap">${fmt(i.total)}</td>
       </tr>`).join('')
 
-    const allPayments = [
-      ...payments.filter((p) => p.amount > 0),
-      ...(giftAmt > 0 ? [{ mode: giftModeName, amount: giftAmt, serial: giftSerial }] : []),
-    ]
+    const allPayments = paymentType === 'credit'
+      ? [{ mode: 'Credit (Receivable)', amount: grandTotal }]
+      : [
+          ...payments.filter((p) => p.amount > 0),
+          ...(giftAmt > 0 ? [{ mode: giftModeName, amount: giftAmt, serial: giftSerial }] : []),
+        ]
     const payRows = allPayments.map((p) => `
         <tr>
           <td style="padding:1px 0">${p.mode}${p.serial ? ` #${p.serial}` : ''}</td>
@@ -392,6 +491,9 @@ export default function PaymentModal() {
   }
 
   function finishCheckout(changeAmt) {
+    // Record sold quantities so ItemGrid shows real-time adjusted stock
+    // without waiting for ERPNext's Bin table to update at session close.
+    addSoldToSession(currentBill.items)
     if (changeAmt > 0) {
       setChangeOverlay(changeAmt)
       setTimeout(() => {
@@ -407,41 +509,64 @@ export default function PaymentModal() {
 
   // ── Submit invoice ───────────────────────────────────────────────────────
   async function handleConfirm() {
-    if (!isFullyPaid) {
+    if (!posOpeningEntry) {
+      setError('No POS session is open — please open a POS session before processing sales.')
+      return
+    }
+    if (paymentType === 'credit' && !creditCustomerValid) {
+      setError('Credit sale requires a named customer — Walk-in Customer is not allowed')
+      return
+    }
+    if (paymentType === 'cash' && !isFullyPaid) {
       setError(`Balance due: ${fmt(balanceDue)} — add more payment`)
+      return
+    }
+    if (paymentType === 'cash' && giftVoucher.show && giftAmt > 0 && !giftAccount) {
+      setError(`Gift card account is not configured — set the "Gift Card" field on the POS Profile in ERPNext, or configure a GL account in Settings.`)
       return
     }
     setSubmitting(true)
     setError('')
 
-    const changeAmt   = change           // capture before state resets
-    const invoiceData = buildInvoice(changeAmt)
-
     try {
-      if (!isOnline) throw new Error('offline')
-
-      const draft = await createPOSInvoice(invoiceData)
-      if (!draft?.name) throw new Error('Invoice created but no name returned')
-
-      await submitPOSInvoice(draft.name)
-
-      // Fire print + drawer in background — don't block checkout
-      printReceipt(draft.name)
-      kickCashDrawer()
-
-      finishCheckout(changeAmt)
-    } catch (err) {
-      if (!isOnline || err.message === 'offline') {
-        await queueInvoice(invoiceData)
-        // Offline: still kick drawer (cash sale), skip print
+      if (paymentType === 'credit') {
+        // ── Credit sale → Sales Invoice (creates customer receivable, no payment needed)
+        if (!isOnline) throw new Error('Credit sales require an internet connection')
+        const invoiceData = buildCreditInvoice()
+        const draft = await createSalesInvoice(invoiceData)
+        if (!draft?.name) throw new Error('Sales Invoice created but no name returned')
+        await submitSalesInvoice(draft.name)
+        printReceipt(draft.name)
+        finishCheckout(0)
+      } else {
+        // ── Cash / Card sale → POS Invoice
+        const changeAmt   = change
+        const invoiceData = buildInvoice(changeAmt)
+        if (!isOnline) throw new Error('offline')
+        const draft = await createPOSInvoice(invoiceData)
+        if (!draft?.name) throw new Error('Invoice created but no name returned')
+        await submitPOSInvoice(draft.name)
+        printReceipt(draft.name)
         kickCashDrawer()
         finishCheckout(changeAmt)
+      }
+    } catch (err) {
+      if (paymentType === 'cash' && (!isOnline || err.message === 'offline')) {
+        const invoiceData = buildInvoice(change)
+        await queueInvoice(invoiceData)
+        kickCashDrawer()
+        finishCheckout(change)
       } else {
-        const msg =
-          err?.response?.data?.exc ||
-          err?.response?.data?.message ||
-          err?.message ||
-          'Submission failed'
+        // err.message is the clean human-readable message parsed from _server_messages
+        // by the request() helper. Only fall back to the raw traceback (exc) if nothing
+        // better is available, and strip it so the UI shows just the last line.
+        let msg = err?.message || ''
+        if (!msg || msg.startsWith('HTTP ')) {
+          const exc = err?.response?.data?.exc || ''
+          // Extract the last non-empty line from the Python traceback as the error
+          const lines = exc.split('\n').map((l) => l.trim()).filter(Boolean)
+          msg = lines[lines.length - 1] || err?.response?.data?.message || 'Submission failed'
+        }
         setError(msg)
       }
     } finally {
@@ -501,9 +626,80 @@ export default function PaymentModal() {
               )}
             </div>
 
+            {/* ── Payment type toggle: Cash / Credit ───────────── */}
+            <div className="px-6 pt-4 pb-0 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPaymentType('cash')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-bold border-2 transition-colors ${
+                  paymentType === 'cash'
+                    ? 'bg-green-700 border-green-500 text-white'
+                    : 'bg-gray-700/50 border-gray-600 text-gray-400 hover:text-white hover:border-gray-500'
+                }`}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+                Cash / Card
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentType('credit')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-bold border-2 transition-colors ${
+                  paymentType === 'credit'
+                    ? 'bg-amber-700 border-amber-500 text-white'
+                    : 'bg-gray-700/50 border-gray-600 text-gray-400 hover:text-white hover:border-gray-500'
+                }`}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+                Credit (Receivable)
+                <span className="opacity-40 font-mono font-normal text-xs">F8</span>
+              </button>
+            </div>
+
             {/* ── Payment method rows ─────────────────────────── */}
             <div className="px-6 py-4 space-y-3">
-              {payments.map((p, idx) => {
+              {/* ── Credit mode panel ── */}
+              {paymentType === 'credit' && (
+                <div className={`rounded-xl border-2 px-5 py-5 text-center ${
+                  creditCustomerValid
+                    ? 'border-amber-600 bg-amber-900/20'
+                    : 'border-red-800 bg-red-900/10'
+                }`}>
+                  {creditCustomerValid ? (
+                    <>
+                      <div className="w-10 h-10 rounded-full bg-amber-700/50 flex items-center justify-center mx-auto mb-3">
+                        <svg className="w-5 h-5 text-amber-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                      </div>
+                      <p className="text-white font-bold text-2xl tabular-nums mb-1">{fmt(grandTotal)}</p>
+                      <p className="text-amber-400 text-sm">will be added to receivables for</p>
+                      <p className="text-white font-semibold text-base mt-1">{currentBill.customer.customer_name}</p>
+                      <p className="text-gray-500 text-xs mt-2">Invoice will be submitted as unpaid — customer owes this amount</p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-10 h-10 rounded-full bg-red-800/50 flex items-center justify-center mx-auto mb-3">
+                        <svg className="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                        </svg>
+                      </div>
+                      <p className="text-red-400 font-semibold text-sm">
+                        {currentBill.customer ? 'Walk-in Customer cannot be used for credit' : 'No customer selected'}
+                      </p>
+                      <p className="text-gray-500 text-xs mt-1">
+                        Select a named customer (Retail or Wholesale) — not Walk-in
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ── Cash/Card payment rows (hidden in credit mode) ── */}
+              {paymentType === 'cash' && payments.map((p, idx) => {
                 const isCash   = p.mode.toLowerCase().includes('cash')
                 const isCard   = p.mode.toLowerCase().includes('card')
                 const isKoko   = p.mode.toLowerCase().includes('koko')
@@ -590,8 +786,8 @@ export default function PaymentModal() {
                 )
               })}
 
-              {/* ── Gift Card ────────────────────────────────── */}
-              {giftVoucher.show ? (
+              {/* ── Gift Card (only in cash mode) ────────────────────────────────── */}
+              {paymentType === 'cash' && (giftVoucher.show ? (
                 <div className="rounded-xl border-2 border-purple-600 bg-purple-900/15 overflow-hidden">
                   {/* Header */}
                   <div className="flex items-center gap-3 px-4 py-3 border-b border-purple-800/30">
@@ -638,16 +834,48 @@ export default function PaymentModal() {
                   <div className="px-4 pb-3 space-y-2">
                     {/* Serial input + status icon */}
                     <div className="flex items-center gap-2">
-                      <input
-                        ref={serialRef}
-                        type="text"
-                        placeholder="Voucher serial number"
-                        value={giftSerial}
-                        onChange={(e) => { setGiftSerial(e.target.value); setGiftSerialStatus(null); setGiftSerialData(null) }}
-                        onBlur={() => { if (giftSerial.trim()) validateSerial(giftSerial) }}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); validateSerial(giftSerial) } }}
-                        className="flex-1 rounded-lg px-3 py-2 text-sm text-white bg-gray-700 border-2 border-gray-600 focus:outline-none focus:border-purple-500 placeholder-gray-600"
-                      />
+                      <div className="flex-1 relative">
+                        <input
+                          ref={serialRef}
+                          type="text"
+                          placeholder="Type to search voucher serial…"
+                          value={giftSerial}
+                          onChange={(e) => { setGiftSerial(e.target.value); setGiftSerialStatus(null); setGiftSerialData(null) }}
+                          onBlur={() => { setTimeout(() => setSerialSuggestions([]), 200); if (giftSerial.trim() && !serialSuggestions.length) validateSerial(giftSerial) }}
+                          onKeyDown={(e) => {
+                            if (serialSuggestions.length > 0) {
+                              if (e.key === 'ArrowDown') { e.preventDefault(); setSerialDropIdx((i) => Math.min(i + 1, serialSuggestions.length - 1)); return }
+                              if (e.key === 'ArrowUp')   { e.preventDefault(); setSerialDropIdx((i) => Math.max(i - 1, 0)); return }
+                              if (e.key === 'Enter' || e.key === 'Tab') {
+                                e.preventDefault()
+                                const s = serialSuggestions[serialDropIdx]
+                                if (s) { setGiftSerial(s.name); setSerialSuggestions([]); validateSerial(s.name) }
+                                return
+                              }
+                              if (e.key === 'Escape') { e.preventDefault(); setSerialSuggestions([]); return }
+                            }
+                            if (e.key === 'Enter') { e.preventDefault(); validateSerial(giftSerial) }
+                          }}
+                          className="w-full rounded-lg px-3 py-2 text-sm text-white bg-gray-700 border-2 border-gray-600 focus:outline-none focus:border-purple-500 placeholder-gray-600"
+                        />
+                        {serialSuggestions.length > 0 && (
+                          <div className="absolute z-20 left-0 right-0 top-full mt-0.5 bg-gray-900 border border-purple-700/60 rounded-lg shadow-xl overflow-hidden">
+                            {serialSuggestions.map((s, i) => (
+                              <button
+                                key={s.name}
+                                type="button"
+                                onMouseDown={(e) => { e.preventDefault(); setGiftSerial(s.name); setSerialSuggestions([]); validateSerial(s.name) }}
+                                className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                                  i === serialDropIdx ? 'bg-purple-800/60 text-purple-200' : 'text-gray-300 hover:bg-gray-700'
+                                }`}
+                              >
+                                <span className="font-mono font-semibold">{s.name}</span>
+                                {s.item_name && <span className="ml-2 text-gray-500">{s.item_name}</span>}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <div className="w-7 h-7 flex items-center justify-center flex-shrink-0">
                         {giftSerialStatus === 'checking' && (
                           <svg className="w-5 h-5 animate-spin text-purple-400" fill="none" viewBox="0 0 24 24">
@@ -722,53 +950,68 @@ export default function PaymentModal() {
                   Apply {giftModeName}
                   <span className="text-purple-700 text-xs ml-1">Key: G</span>
                 </button>
-              )}
+              ))}
             </div>
 
-            {/* ── Summary ──────────────────────────────────────── */}
-            <div className="px-6 pb-2 space-y-2">
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-gray-400">Total Received</span>
-                <span className={`font-semibold tabular-nums ${
-                  effectivePaid >= grandTotal ? 'text-green-400' : 'text-gray-300'
-                }`}>{fmt(totalPaid)}</span>
+            {/* ── Summary (cash mode only) ─────────────────────── */}
+            {paymentType === 'cash' && (
+              <div className="px-6 pb-2 space-y-2">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-gray-400">Total Received</span>
+                  <span className={`font-semibold tabular-nums ${
+                    effectivePaid >= grandTotal ? 'text-green-400' : 'text-gray-300'
+                  }`}>{fmt(totalPaid)}</span>
+                </div>
+
+                {change > 0 && (
+                  <div className="flex items-center justify-between bg-yellow-900/30 border border-yellow-700 rounded-xl px-4 py-3">
+                    <div>
+                      <p className="text-yellow-300 text-xs font-semibold uppercase tracking-wider">Change to Return</p>
+                      <p className="text-yellow-400 text-xs mt-0.5 opacity-70">Give back to customer</p>
+                    </div>
+                    <span className="text-yellow-300 font-bold text-2xl tabular-nums">{fmt(change)}</span>
+                  </div>
+                )}
+
+                {balanceDue > 0.01 && (
+                  <div className="flex items-center justify-between bg-red-900/30 border border-red-700 rounded-xl px-4 py-3">
+                    <div>
+                      <p className="text-red-300 text-xs font-semibold uppercase tracking-wider">Balance Due</p>
+                      <p className="text-red-400 text-xs mt-0.5 opacity-70">Still to be collected</p>
+                    </div>
+                    <span className="text-red-300 font-bold text-2xl tabular-nums">{fmt(balanceDue)}</span>
+                  </div>
+                )}
+
+                {isFullyPaid && change === 0 && (
+                  <div className="flex items-center justify-center gap-2 bg-green-900/20 border border-green-800/50 rounded-lg px-4 py-2">
+                    <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
+                      <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <span className="text-green-400 text-sm font-medium">Exact amount — ready to confirm</span>
+                  </div>
+                )}
               </div>
-
-              {change > 0 && (
-                <div className="flex items-center justify-between bg-yellow-900/30 border border-yellow-700 rounded-xl px-4 py-3">
-                  <div>
-                    <p className="text-yellow-300 text-xs font-semibold uppercase tracking-wider">Change to Return</p>
-                    <p className="text-yellow-400 text-xs mt-0.5 opacity-70">Give back to customer</p>
-                  </div>
-                  <span className="text-yellow-300 font-bold text-2xl tabular-nums">{fmt(change)}</span>
-                </div>
-              )}
-
-              {balanceDue > 0.01 && (
-                <div className="flex items-center justify-between bg-red-900/30 border border-red-700 rounded-xl px-4 py-3">
-                  <div>
-                    <p className="text-red-300 text-xs font-semibold uppercase tracking-wider">Balance Due</p>
-                    <p className="text-red-400 text-xs mt-0.5 opacity-70">Still to be collected</p>
-                  </div>
-                  <span className="text-red-300 font-bold text-2xl tabular-nums">{fmt(balanceDue)}</span>
-                </div>
-              )}
-
-              {isFullyPaid && change === 0 && (
-                <div className="flex items-center justify-center gap-2 bg-green-900/20 border border-green-800/50 rounded-lg px-4 py-2">
-                  <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
-                    <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                  <span className="text-green-400 text-sm font-medium">Exact amount — ready to confirm</span>
-                </div>
-              )}
-            </div>
+            )}
 
             {error && (
               <div className="mx-6 mb-2 bg-red-900/40 border border-red-700 rounded-lg px-4 py-2.5 text-red-300 text-sm break-words">
                 {error}
+              </div>
+            )}
+
+            {/* ── No session warning ───────────────────────────── */}
+            {!posOpeningEntry && (
+              <div className="mx-6 mb-2 bg-amber-900/40 border border-amber-700 rounded-lg px-4 py-3 flex items-center gap-3">
+                <svg className="w-5 h-5 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+                <div>
+                  <p className="text-amber-300 text-sm font-semibold">No POS Session Open</p>
+                  <p className="text-amber-500 text-xs mt-0.5">Sales cannot be processed until a cashier opens a session.</p>
+                </div>
               </div>
             )}
 
@@ -777,8 +1020,14 @@ export default function PaymentModal() {
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={submitting || !isFullyPaid}
-                className="w-full bg-green-600 hover:bg-green-500 active:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-colors text-lg"
+                disabled={submitting || !isFullyPaid || !posOpeningEntry}
+                className={`w-full disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-colors text-lg ${
+                  !posOpeningEntry
+                    ? 'bg-gray-700 cursor-not-allowed'
+                    : paymentType === 'credit'
+                      ? 'bg-amber-600 hover:bg-amber-500 active:bg-amber-700'
+                      : 'bg-green-600 hover:bg-green-500 active:bg-green-700'
+                }`}
               >
                 {submitting ? (
                   <span className="flex items-center justify-center gap-2">
@@ -788,6 +1037,10 @@ export default function PaymentModal() {
                     </svg>
                     Submitting…
                   </span>
+                ) : !posOpeningEntry ? (
+                  'No Session — Cannot Confirm'
+                ) : paymentType === 'credit' ? (
+                  `Confirm Credit  ·  ${fmt(grandTotal)}`
                 ) : (
                   `Confirm  ·  ${fmt(grandTotal)}`
                 )}

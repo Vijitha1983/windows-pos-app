@@ -33,12 +33,14 @@ export default function SalesSummaryModal() {
   async function loadSummary() {
     setLoading(true)
     try {
-      const data = await getTodayInvoiceSummary(posProfile, sessionStartDate)
+      const data = await getTodayInvoiceSummary(posProfile, sessionStartDate, username)
       setSummary(data)
-      // Load category breakdown from invoice items
-      if (data.invoices?.length > 0) {
+      // Load category breakdown from POS + credit invoice items
+      const posNames    = data.invoices?.map((i) => i.name) || []
+      const creditNames = data.creditInvoices?.map((i) => i.name) || []
+      if (posNames.length > 0 || creditNames.length > 0) {
         setLoadingCats(true)
-        getCategoryWiseSales(data.invoices.map((i) => i.name))
+        getCategoryWiseSales(posNames, creditNames)
           .then((cats) => setByCategory(cats))
           .catch(() => setByCategory({}))
           .finally(() => setLoadingCats(false))
@@ -107,6 +109,7 @@ export default function SalesSummaryModal() {
       ${modeRow('Koko Pay', kokoKey, byMode[kokoKey])}
       ${modeRow('Gift Voucher', voucherKey, byMode[voucherKey])}
       ${otherModes.map(([k, v]) => `<tr><td>${k}</td><td style="text-align:right">${fmtN(v)}</td></tr>`).join('')}
+      ${(currentSummary?.creditTotal > 0) ? `<tr><td>Credit Sales (Receivable)</td><td style="text-align:right">${fmtN(currentSummary.creditTotal)}</td></tr>` : ''}
     </table>
     <div class="sep"></div>
 
@@ -174,6 +177,7 @@ export default function SalesSummaryModal() {
             ${modeRow('Koko Pay', kokoKey, byMode[kokoKey])}
             ${modeRow('Gift Voucher', voucherKey, byMode[voucherKey])}
             ${otherModes.map(([k, v]) => `<tr>${cell(k)}${rcell(fmtN(v))}</tr>`).join('')}
+            ${(currentSummary?.creditTotal > 0) ? `<tr>${cell('Credit Sales (Receivable)')}${rcell(fmtN(currentSummary.creditTotal), false, '#d97706')}</tr>` : ''}
           </tbody>
         </table>
 
@@ -447,7 +451,10 @@ export default function SalesSummaryModal() {
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-1 h-5 rounded-full bg-blue-500" />
                   <h3 className="text-white font-bold text-sm uppercase tracking-wider">Day Sales Summary</h3>
-                  <span className="ml-auto text-xs text-gray-500">{summary.count} invoice{summary.count !== 1 ? 's' : ''}</span>
+                  <span className="ml-auto text-xs text-gray-500">
+                    {(summary.count + (summary.creditCount || 0))} invoice{(summary.count + (summary.creditCount || 0)) !== 1 ? 's' : ''}
+                    {summary.creditCount > 0 && <span className="text-amber-500 ml-1">({summary.creditCount} credit)</span>}
+                  </span>
                 </div>
 
                 <div className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden">
@@ -543,6 +550,24 @@ export default function SalesSummaryModal() {
                         : <span className="text-gray-600 text-xs">—</span>}
                     </span>
                   </div>
+
+                  {/* Credit Sales (Sales Invoices — receivables) */}
+                  {summary.creditTotal > 0 && (
+                    <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-700/40">
+                      <div className="flex items-center gap-2.5 pl-4">
+                        <div className="w-2 h-2 rounded-full bg-amber-400" />
+                        <span className="text-gray-400 text-sm">
+                          Credit Sales
+                          {summary.totalSales > 0 && (
+                            <span className="ml-2 text-gray-600 text-xs">
+                              ({((summary.creditTotal / summary.totalSales) * 100).toFixed(0)}%)
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <span className="text-amber-400 font-semibold tabular-nums text-sm">{fmt(summary.creditTotal)}</span>
+                    </div>
+                  )}
 
                   {/* Other payment modes (anything not cash/card/voucher) */}
                   {otherModes.map(([mode, amount]) => (

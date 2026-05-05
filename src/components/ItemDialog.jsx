@@ -1,8 +1,99 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
+import { getAvailableSerialNos } from '../services/api'
+
+function SerialNoInput({ serialNo, setSerialNo, availableSerials, serialsLoading }) {
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const [dropIdx, setDropIdx] = useState(0)
+  const textareaRef = useRef(null)
+
+  const addedSerials = new Set(serialNo.split('\n').map((s) => s.trim()).filter(Boolean))
+
+  // Extract what's being typed on the current (last) line
+  const lines = serialNo.split('\n')
+  const currentLine = lines[lines.length - 1].trim()
+
+  const suggestions = currentLine.length === 0 ? [] : availableSerials.filter(
+    (sn) => !addedSerials.has(sn) && sn.toLowerCase().includes(currentLine.toLowerCase())
+  ).slice(0, 8)
+
+  useEffect(() => {
+    setDropIdx(0)
+    setDropdownOpen(suggestions.length > 0)
+  }, [currentLine, serialNo])
+
+  function pickSuggestion(sn) {
+    setSerialNo((prev) => {
+      const parts = prev.split('\n')
+      parts[parts.length - 1] = sn
+      return parts.join('\n') + '\n'
+    })
+    setDropdownOpen(false)
+    setTimeout(() => {
+      const ta = textareaRef.current
+      if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length }
+    }, 10)
+  }
+
+  function handleKeyDown(e) {
+    if (dropdownOpen && suggestions.length > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); setDropIdx((i) => Math.min(i + 1, suggestions.length - 1)); return }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); e.stopPropagation(); setDropIdx((i) => Math.max(i - 1, 0)); return }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); pickSuggestion(suggestions[dropIdx]); return }
+      if (e.key === 'Escape')    { e.preventDefault(); e.stopPropagation(); setDropdownOpen(false); return }
+    }
+    e.stopPropagation()
+  }
+
+  return (
+    <div className="flex-1 relative">
+      <label className="block text-xs text-amber-400 font-medium mb-1">
+        Serial No
+        {serialsLoading && <span className="ml-2 text-gray-500 font-normal">loading…</span>}
+        {!serialsLoading && availableSerials.length > 0 && (
+          <span className="ml-2 text-gray-500 font-normal">({availableSerials.length - addedSerials.size} available · type to search)</span>
+        )}
+      </label>
+      <textarea
+        ref={textareaRef}
+        value={serialNo}
+        onChange={(e) => setSerialNo(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleKeyDown}
+        onBlur={() => setTimeout(() => setDropdownOpen(false), 150)}
+        rows={2}
+        placeholder={"Type to search serial…"}
+        className="w-full bg-gray-700 border border-amber-700/50 focus:border-amber-500 rounded-lg px-3 py-1.5 text-white text-xs font-mono placeholder-gray-600 focus:outline-none resize-none"
+      />
+      {dropdownOpen && (
+        <div className="absolute z-10 left-0 right-0 bg-gray-900 border border-amber-700/60 rounded-lg shadow-xl overflow-hidden">
+          {suggestions.map((sn, i) => (
+            <button
+              key={sn}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); pickSuggestion(sn) }}
+              className={`w-full text-left px-3 py-1.5 text-xs font-mono transition-colors ${
+                i === dropIdx ? 'bg-amber-800/60 text-amber-200' : 'text-gray-300 hover:bg-gray-700'
+              }`}
+            >
+              {sn}
+            </button>
+          ))}
+        </div>
+      )}
+      {addedSerials.size > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {[...addedSerials].map((sn) => (
+            <span key={sn} className="px-2 py-0.5 bg-green-900/40 border border-green-700 text-green-400 rounded text-xs font-mono">{sn}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function ItemDialog() {
-  const { itemDialog, closeItemDialog, addItemToBill } = usePOSStore()
+  const { itemDialog, closeItemDialog, addItemToBill, posProfileData } = usePOSStore()
 
   const item   = itemDialog?.item
   const levels = itemDialog?.levels || []
@@ -26,11 +117,13 @@ export default function ItemDialog() {
     }))
   }
 
-  const [rows,        setRows]   = useState([])
-  const [selectedIdx, setIdx]    = useState(0)
-  const [qty,         setQty]    = useState('1')
-  const [serialNo,    setSerialNo] = useState('')
-  const [batchNo,     setBatchNo]  = useState('')
+  const [rows,            setRows]           = useState([])
+  const [selectedIdx,     setIdx]            = useState(0)
+  const [qty,             setQty]            = useState('1')
+  const [serialNo,        setSerialNo]       = useState('')
+  const [batchNo,         setBatchNo]        = useState('')
+  const [availableSerials, setAvailableSerials] = useState([])
+  const [serialsLoading,   setSerialsLoading]   = useState(false)
 
   const containerRef = useRef(null)
   const qtyRef       = useRef(null)
@@ -45,11 +138,20 @@ export default function ItemDialog() {
       setQty('1')
       setSerialNo('')
       setBatchNo('')
+      setAvailableSerials([])
       discountRefs.current = []
       setTimeout(() => {
         containerRef.current?.focus()
         qtyRef.current?.select()
       }, 40)
+
+      if (itemDialog.item?.has_serial_no) {
+        setSerialsLoading(true)
+        getAvailableSerialNos(itemDialog.item.item_code, posProfileData?.warehouse)
+          .then((serials) => setAvailableSerials(serials))
+          .catch(() => {})
+          .finally(() => setSerialsLoading(false))
+      }
     }
   }, [itemDialog])
 
@@ -255,20 +357,12 @@ export default function ItemDialog() {
         {(item?.has_serial_no || item?.has_batch_no) && (
           <div className="px-6 py-3 border-t border-gray-700 flex gap-4">
             {item?.has_serial_no ? (
-              <div className="flex-1">
-                <label className="block text-xs text-amber-400 font-medium mb-1">
-                  Serial No <span className="text-gray-500 font-normal">(one per line · optional)</span>
-                </label>
-                <textarea
-                  value={serialNo}
-                  onChange={(e) => setSerialNo(e.target.value)}
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                  rows={2}
-                  placeholder={"SN-001\nSN-002"}
-                  className="w-full bg-gray-700 border border-amber-700/50 focus:border-amber-500 rounded-lg px-3 py-1.5 text-white text-xs font-mono placeholder-gray-600 focus:outline-none resize-none"
-                />
-              </div>
+              <SerialNoInput
+                serialNo={serialNo}
+                setSerialNo={setSerialNo}
+                availableSerials={availableSerials}
+                serialsLoading={serialsLoading}
+              />
             ) : null}
             {item?.has_batch_no ? (
               <div className="flex-1">

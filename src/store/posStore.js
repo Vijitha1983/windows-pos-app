@@ -15,6 +15,7 @@ export const usePOSStore = create((set, get) => ({
   // Auth
   isLoggedIn: false,
   username: '',
+  userFullName: '',
   erpnextUrl: '',
   posProfile: null,
   posProfileData: null,
@@ -24,6 +25,8 @@ export const usePOSStore = create((set, get) => ({
   showImages: false,
   isOnline: true,
   currentScreen: 'login', // 'login' | 'pos' | 'settings'
+  syncStatus: 'idle',     // 'idle' | 'syncing' | 'done' | 'error'
+  syncVersion: 0,         // incremented on each sync so ItemGrid re-fetches stock
 
   // Items
   items: [],
@@ -35,12 +38,15 @@ export const usePOSStore = create((set, get) => ({
   currentBill: emptyBill(),
   heldBills: [],
   selectedRow: -1,
+  billType: 'Retail',        // 'Retail' | 'Wholesale'
+  billPaymentType: 'Cash',   // 'Cash' | 'Credit'
 
   // POS Session
   posOpeningEntry: null,   // ERPNext POS Opening Entry name
   openingCash: 0,          // cash amount at session start
   sessionOpenedBy: null,   // username who created the opening entry (may differ from current user)
   sessionStartDate: null,  // period_start_date from the opening entry (datetime string)
+  soldInSession: {},       // { item_code: total_qty_sold } — real-time local adjustment
 
   // Modals
   itemDialog: null,        // { item, levels[] } — unified item/price/qty dialog
@@ -54,6 +60,7 @@ export const usePOSStore = create((set, get) => ({
   // Actions
   setLoggedIn: (val) => set({ isLoggedIn: val }),
   setUsername: (u) => set({ username: u }),
+  setUserFullName: (n) => set({ userFullName: n }),
   setErpnextUrl: (url) => set({ erpnextUrl: url }),
   setPosProfile: (p) => set({ posProfile: p }),
   setPosProfileData: (d) => set({ posProfileData: d }),
@@ -68,6 +75,8 @@ export const usePOSStore = create((set, get) => ({
   setShowImages: (v) => set({ showImages: v }),
   setOnline: (v) => set({ isOnline: v }),
   setCurrentScreen: (s) => set({ currentScreen: s }),
+  setSyncStatus: (s) => set({ syncStatus: s }),
+  incrementSyncVersion: () => set((state) => ({ syncVersion: state.syncVersion + 1, soldInSession: {} })),
   lockScreen: () => set({ currentScreen: 'login' }),  // lock without clearing session data
 
   setItems: (items) => set({ items }),
@@ -149,7 +158,7 @@ export const usePOSStore = create((set, get) => ({
     set((state) => ({ currentBill: { ...state.currentBill, customer } }))
   },
 
-  newBill: () => set({ currentBill: emptyBill(), selectedRow: -1 }),
+  newBill: () => set({ currentBill: emptyBill(), selectedRow: -1, billPaymentType: 'Cash' }),
 
   holdBill: () => {
     const bill = get().currentBill
@@ -173,6 +182,10 @@ export const usePOSStore = create((set, get) => ({
   },
 
   setSelectedRow: (i) => set({ selectedRow: i }),
+  setBillType: (type) => set({ billType: type }),
+  toggleBillType: () => set((state) => ({ billType: state.billType === 'Retail' ? 'Wholesale' : 'Retail' })),
+  setBillPaymentType: (type) => set({ billPaymentType: type }),
+  toggleBillPaymentType: () => set((state) => ({ billPaymentType: state.billPaymentType === 'Cash' ? 'Credit' : 'Cash' })),
 
   // Item dialog
   openItemDialog: (item, levels) => set({ itemDialog: { item, levels } }),
@@ -180,7 +193,14 @@ export const usePOSStore = create((set, get) => ({
 
   // POS Session actions
   setPosOpeningEntry: (name, cash, openedBy, startDate) => set({ posOpeningEntry: name, openingCash: Number(cash) || 0, sessionOpenedBy: openedBy || null, sessionStartDate: startDate || null }),
-  clearPOSSession: () => set({ posOpeningEntry: null, openingCash: 0, sessionOpenedBy: null, sessionStartDate: null }),
+  clearPOSSession: () => set({ posOpeningEntry: null, openingCash: 0, sessionOpenedBy: null, sessionStartDate: null, soldInSession: {} }),
+  addSoldToSession: (items) => set((state) => {
+    const updated = { ...state.soldInSession }
+    for (const item of items) {
+      if (item.qty > 0) updated[item.item_code] = (updated[item.item_code] || 0) + item.qty
+    }
+    return { soldInSession: updated }
+  }),
 
   // Modals
   openPriceLevelModal: (item, priceLevels) => set({ priceLevelModal: { item, priceLevels } }),

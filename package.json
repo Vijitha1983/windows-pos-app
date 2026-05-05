@@ -8,8 +8,9 @@
     "dev": "kill-port 5173 & concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "electron": "electron .",
-    "dist": "vite build && electron-builder",
-    "dist:dir": "vite build && electron-builder --dir",
+    "make-icon": "node scripts/make-icon.js",
+    "dist": "node scripts/make-icon.js && vite build && electron-builder",
+    "dist:dir": "node scripts/make-icon.js && vite build && electron-builder --dir",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "electron": "^27.0.0",
     "electron-builder": "^24.6.0",
     "kill-port": "^2.0.1",
+    "png-to-ico": "^3.0.1",
     "postcss": "^8.4.31",
     "tailwindcss": "^3.3.5",
     "vite": "^5.0.0",
@@ -50,7 +52,12 @@
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "public/icon.ico",
       "artifactName": "${productName}-Setup-${version}.${ext}",

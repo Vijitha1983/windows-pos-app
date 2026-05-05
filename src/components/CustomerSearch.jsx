@@ -14,6 +14,15 @@ export default function CustomerSearch() {
 
   const customer = currentBill.customer
 
+  // F9 opens the customer search from anywhere on the POS screen
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'F9') { e.preventDefault(); setOpen(true) }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
   useEffect(() => {
     if (!open) return
     setTimeout(() => inputRef.current?.focus(), 40)
@@ -70,7 +79,10 @@ export default function CustomerSearch() {
         {customer ? (
           <span className="text-white flex-1 truncate">{customer.customer_name}</span>
         ) : (
-          <span className="text-gray-400 flex-1">Walk-in Customer</span>
+          <span className="text-gray-400 flex-1">
+            Walk-in Customer
+            <span className="ml-2 text-gray-600 text-xs font-mono">F9</span>
+          </span>
         )}
         {customer && (
           <span

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { authenticate, signOut } from '../services/auth'
-import { getPOSProfiles, getPOSProfile, setBaseURL } from '../services/api'
+import { getPOSProfiles, getPOSProfile, getUserFullName, setBaseURL } from '../services/api'
 import { usePOSStore } from '../store/posStore'
 
 export default function Login() {
@@ -11,6 +11,7 @@ export default function Login() {
   const [profiles, setProfiles] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [companyName, setCompanyName] = useState('')
 
   const store = usePOSStore()
   const isLocked = store.isLoggedIn && !!store.username  // came from Ctrl+L lock, not fresh boot
@@ -48,8 +49,16 @@ export default function Login() {
       const profileList = await getPOSProfiles()
       if (profileList.length === 0) throw new Error('No POS Profiles found for this user.')
       setProfiles(profileList)
+      setCompanyName(profileList[0]?.company || '')
       store.setUsername(username.trim())
       store.setErpnextUrl(url.trim())
+      // Fetch display name (first + last name) — fall back to username if unavailable
+      try {
+        const fullName = await getUserFullName(username.trim())
+        store.setUserFullName(fullName)
+      } catch {
+        store.setUserFullName(username.trim())
+      }
       setStep('profile')
     } catch (err) {
       setError(err.response?.data?.message || err.message || 'Login failed')
@@ -86,7 +95,9 @@ export default function Login() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
               </svg>
             </div>
-            <h1 className="text-xl font-bold text-white">POS Locked</h1>
+            <h1 className="text-xl font-bold text-white">
+              {store.posProfileData?.company || 'POS'} — Locked
+            </h1>
             <p className="text-gray-500 text-sm mt-1">Enter your password to resume</p>
           </div>
 
@@ -96,11 +107,11 @@ export default function Login() {
               <div className="flex items-center gap-3 bg-gray-700/50 rounded-lg px-4 py-3">
                 <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
                   <span className="text-white text-sm font-bold uppercase">
-                    {store.username?.[0] || '?'}
+                    {(store.userFullName || store.username)?.[0] || '?'}
                   </span>
                 </div>
                 <div>
-                  <p className="text-white text-sm font-medium">{store.username}</p>
+                  <p className="text-white text-sm font-medium">{store.userFullName || store.username}</p>
                   <p className="text-gray-500 text-xs">{store.posProfile}</p>
                 </div>
               </div>
@@ -161,7 +172,9 @@ export default function Login() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 11h.01M12 11h.01M15 11h.01M4 19h16a2 2 0 002-2V7a2 2 0 00-2-2H4a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-white">ERPNext POS</h1>
+          <h1 className="text-2xl font-bold text-white">
+            {companyName || 'Point of Sale'}
+          </h1>
           <p className="text-gray-400 text-sm mt-1">Point of Sale Terminal</p>
         </div>
 

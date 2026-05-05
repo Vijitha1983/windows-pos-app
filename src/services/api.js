@@ -79,6 +79,13 @@ export async function getLoggedInUser() {
   return data.message
 }
 
+export async function getUserFullName(username) {
+  const data = await request('GET', `/api/resource/User/${encodeURIComponent(username)}` + qs({ fields: JSON.stringify(['full_name', 'first_name', 'last_name']) }))
+  const u = data.data
+  if (u?.full_name) return u.full_name
+  return [u?.first_name, u?.last_name].filter(Boolean).join(' ') || username
+}
+
 // ─── Mode of Payment / Account helpers ───────────────────────────────────────
 
 // Resolves the GL account for a gift-card/voucher payment in two steps:
@@ -114,28 +121,36 @@ export async function resolveGiftCardAccount(modeName, company, accountShortName
 
 // ─── Category Wise Sales ─────────────────────────────────────────────────────
 
-// Returns { [item_group]: total_amount } for the given POS invoice names.
-// Fetches each invoice individually so we get the full items child table,
-// then looks up item_group from the Item doctype for any rows missing it.
-export async function getCategoryWiseSales(invoiceNames) {
-  if (!invoiceNames || invoiceNames.length === 0) return {}
+// Returns { [item_group]: total_amount } for given POS + credit Sales invoice names.
+export async function getCategoryWiseSales(invoiceNames, creditInvoiceNames = []) {
+  if ((!invoiceNames || invoiceNames.length === 0) && creditInvoiceNames.length === 0) return {}
 
-  // Step 1 — fetch each POS Invoice in parallel (batches of 10)
-  const allRows = []  // { item_code, item_group, amount }
+  const allRows = []
   const batchSize = 10
+
+  // Fetch POS Invoices
   for (let i = 0; i < invoiceNames.length; i += batchSize) {
     const batch = invoiceNames.slice(i, i + batchSize)
     await Promise.all(batch.map(async (name) => {
       try {
         const data = await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(name)}`)
         for (const item of data.data?.items || []) {
-          if (item.item_code && item.amount > 0) {
-            allRows.push({
-              item_code:  item.item_code,
-              item_group: item.item_group || null,
-              amount:     item.amount,
-            })
-          }
+          if (item.item_code && item.amount > 0)
+            allRows.push({ item_code: item.item_code, item_group: item.item_group || null, amount: item.amount })
+        }
+      } catch {}
+    }))
+  }
+
+  // Fetch credit Sales Invoices
+  for (let i = 0; i < creditInvoiceNames.length; i += batchSize) {
+    const batch = creditInvoiceNames.slice(i, i + batchSize)
+    await Promise.all(batch.map(async (name) => {
+      try {
+        const data = await request('GET', `/api/resource/Sales Invoice/${encodeURIComponent(name)}`)
+        for (const item of data.data?.items || []) {
+          if (item.item_code && item.amount > 0)
+            allRows.push({ item_code: item.item_code, item_group: item.item_group || null, amount: item.amount })
         }
       } catch {}
     }))
@@ -233,6 +248,38 @@ export async function validateGiftVoucherSerial(serialNo) {
   return data.data
 }
 
+// Searches redeemable (Delivered) gift voucher serials matching the query prefix.
+// Status 'Delivered' means the voucher was sold to a customer and can now be redeemed as payment.
+export async function searchDeliveredSerialNos(query) {
+  if (!query) return []
+  const data = await request('GET', '/api/resource/Serial No' + qs({
+    filters:           JSON.stringify([
+      ['status', '=', 'Delivered'],
+      ['name',   'like', `${query}%`],
+    ]),
+    fields:            JSON.stringify(['name', 'item_code', 'item_name']),
+    limit_page_length: 10,
+    order_by:          'name asc',
+  }))
+  return data.data || []
+}
+
+// Returns available (Active) serial numbers for an item, optionally scoped to a warehouse.
+export async function getAvailableSerialNos(itemCode, warehouse) {
+  const filters = [
+    ['item_code', '=', itemCode],
+    ['status',    '=', 'Active'],
+  ]
+  if (warehouse) filters.push(['warehouse', '=', warehouse])
+  const data = await request('GET', '/api/resource/Serial No' + qs({
+    filters:           JSON.stringify(filters),
+    fields:            JSON.stringify(['name', 'warehouse']),
+    limit_page_length: 200,
+    order_by:          'name asc',
+  }))
+  return (data.data || []).map((s) => s.name)
+}
+
 // ─── POS Profiles ────────────────────────────────────────────────────────────
 
 export async function getPOSProfiles() {
@@ -328,6 +375,34 @@ export async function getCustomers(search = '') {
   return data.data
 }
 
+export async function getCustomerOutstandingInvoices(customerName) {
+  const params = {
+    fields: JSON.stringify(['name', 'posting_date', 'due_date', 'outstanding_amount', 'grand_total']),
+    filters: JSON.stringify([
+      ['customer', '=', customerName],
+      ['outstanding_amount', '>', 0],
+      ['docstatus', '=', 1],
+    ]),
+    limit_page_length: 100,
+    order_by: 'due_date asc',
+  }
+  const data = await request('GET', '/api/resource/Sales Invoice' + qs(params))
+  return data.data
+}
+
+// ─── Sales Invoice (credit sales — no payment required, creates receivable) ──
+
+export async function createSalesInvoice(invoiceData) {
+  const data = await request('POST', '/api/resource/Sales Invoice', invoiceData)
+  return data.data
+}
+
+export async function submitSalesInvoice(docName) {
+  const full = await request('GET', `/api/resource/Sales Invoice/${encodeURIComponent(docName)}`)
+  const data = await request('POST', '/api/method/frappe.client.submit', { doc: full.data })
+  return data.message || data
+}
+
 // ─── POS Invoice ─────────────────────────────────────────────────────────────
 
 // Step 1: create a draft (docstatus=0), returns the saved doc with its name
@@ -412,59 +487,89 @@ export async function createPOSOpeningEntry(posProfile, company, user, paymentMe
   return sub.message || full.data
 }
 
-// Returns { invoices, totalSales, byMode, count }
-// byMode = { 'Cash': 30000, 'Card': 15000, ... }
-export async function getTodayInvoiceSummary(posProfile, sessionStartDate) {
+// Returns { invoices, creditInvoices, totalSales, creditTotal, byMode, count, creditCount }
+export async function getTodayInvoiceSummary(posProfile, sessionStartDate, username) {
   const today = new Date().toISOString().split('T')[0]
-  const filters = [
+
+  // ── POS Invoices (cash/card sales) ───────────────────────────────────────
+  const posFilters = [
     ['pos_profile', '=', posProfile],
     ['posting_date', '=', today],
     ['docstatus', '=', 1],
   ]
-  // Scope to invoices created at or after this session started — more reliable than
-  // filtering by pos_opening_entry because ERPNext may not store that link on the
-  // invoice in all versions.
-  if (sessionStartDate) filters.push(['creation', '>=', sessionStartDate])
+  if (sessionStartDate) posFilters.push(['creation', '>=', sessionStartDate])
 
   const invoicesRes = await request('GET', '/api/resource/POS Invoice' + qs({
-    filters: JSON.stringify(filters),
+    filters: JSON.stringify(posFilters),
     fields: JSON.stringify(['name', 'grand_total', 'customer', 'consolidated_invoice']),
     limit_page_length: 500,
     order_by: 'creation desc',
   }))
   const invoices = invoicesRes.data || []
-  const totalSales = invoices.reduce((s, i) => s + (i.grand_total || 0), 0)
-  if (invoices.length === 0) return { invoices, totalSales: 0, byMode: {}, count: 0 }
 
+  // ── Credit Sales Invoices (is_pos=0, created by this cashier this session) ─
+  const siFilters = [
+    ['posting_date', '=', today],
+    ['docstatus',    '=', 1],
+    ['is_pos',       '=', 0],
+  ]
+  if (sessionStartDate) siFilters.push(['creation', '>=', sessionStartDate])
+  if (username) siFilters.push(['owner', '=', username])
+
+  let creditInvoices = []
+  try {
+    const siRes = await request('GET', '/api/resource/Sales Invoice' + qs({
+      filters: JSON.stringify(siFilters),
+      fields: JSON.stringify(['name', 'grand_total', 'customer']),
+      limit_page_length: 500,
+      order_by: 'creation desc',
+    }))
+    creditInvoices = siRes.data || []
+  } catch { /* offline or permission issue — skip credit */ }
+
+  const creditTotal = creditInvoices.reduce((s, i) => s + (i.grand_total || 0), 0)
+  const totalSales  = invoices.reduce((s, i) => s + (i.grand_total || 0), 0) + creditTotal
+
+  if (invoices.length === 0 && creditInvoices.length === 0) {
+    return { invoices: [], creditInvoices: [], totalSales: 0, creditTotal: 0, byMode: {}, count: 0, creditCount: 0 }
+  }
+
+  // ── Payment breakdown (POS Invoices only) ────────────────────────────────
   const names = invoices.map((i) => i.name)
   let byMode = {}
 
-  // Attempt 1: batch query the child payment table (fast, but requires list permission)
-  try {
-    const paymentsRes = await request('GET', '/api/resource/Sales Invoice Payment' + qs({
-      filters: JSON.stringify([
-        ['parent',     'in', names],
-        ['parenttype', '=', 'POS Invoice'],
-      ]),
-      fields: JSON.stringify(['mode_of_payment', 'amount']),
-      limit_page_length: 2000,
-    }))
-    for (const p of paymentsRes.data || []) {
-      if (p.amount > 0) byMode[p.mode_of_payment] = (byMode[p.mode_of_payment] || 0) + p.amount
-    }
-  } catch {
-    // Attempt 2: fetch each invoice individually — slower but works without child-table permissions
-    for (const inv of invoices.slice(0, 200)) {
-      try {
-        const doc = await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(inv.name)}`)
-        for (const p of doc.data?.payments || []) {
-          if (p.amount > 0) byMode[p.mode_of_payment] = (byMode[p.mode_of_payment] || 0) + p.amount
-        }
-      } catch { /* skip */ }
+  if (names.length > 0) {
+    try {
+      const paymentsRes = await request('GET', '/api/resource/Sales Invoice Payment' + qs({
+        filters: JSON.stringify([
+          ['parent',     'in', names],
+          ['parenttype', '=', 'POS Invoice'],
+        ]),
+        fields: JSON.stringify(['mode_of_payment', 'amount']),
+        limit_page_length: 2000,
+      }))
+      for (const p of paymentsRes.data || []) {
+        if (p.amount > 0) byMode[p.mode_of_payment] = (byMode[p.mode_of_payment] || 0) + p.amount
+      }
+    } catch {
+      for (const inv of invoices.slice(0, 200)) {
+        try {
+          const doc = await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(inv.name)}`)
+          for (const p of doc.data?.payments || []) {
+            if (p.amount > 0) byMode[p.mode_of_payment] = (byMode[p.mode_of_payment] || 0) + p.amount
+          }
+        } catch { /* skip */ }
+      }
     }
   }
 
-  return { invoices, totalSales, byMode, count: invoices.length }
+  return {
+    invoices, creditInvoices,
+    totalSales, creditTotal,
+    byMode,
+    count: invoices.length,
+    creditCount: creditInvoices.length,
+  }
 }
 
 export async function closePOSSession(posOpeningEntry, posProfile, company, user, invoices, byMode, openingCash) {
