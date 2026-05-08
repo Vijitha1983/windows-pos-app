@@ -130,7 +130,7 @@ export default function VirtualKeyboard() {
       <KeyboardShell onHide={() => setVisible(false)}>
         {/* F-key row */}
         <FKeyRow />
-        <div className="max-w-[260px] mx-auto py-2 px-3 space-y-1.5">
+        <div className="max-w-[300px] mx-auto py-2 px-3 space-y-1.5">
           {NUMPAD_ONLY.map((row, ri) => (
             <div key={ri} className="flex gap-1.5">
               {row.map((key) => (
@@ -141,6 +141,23 @@ export default function VirtualKeyboard() {
               ))}
             </div>
           ))}
+          {/* + / - shortcuts */}
+          <div className="flex gap-1.5">
+            <button
+              onPointerDown={(e) => { e.preventDefault(); dispatchFKey('+') }}
+              title="+ → Payment / Checkout"
+              className="flex-1 py-2.5 rounded-xl bg-green-700 hover:bg-green-600 text-white font-bold text-base transition-colors active:scale-95"
+            >
+              +
+            </button>
+            <button
+              onPointerDown={(e) => { e.preventDefault(); dispatchFKey('-') }}
+              title="− → Recall saved bill"
+              className="flex-1 py-2.5 rounded-xl bg-yellow-700 hover:bg-yellow-600 text-white font-bold text-base transition-colors active:scale-95"
+            >
+              −
+            </button>
+          </div>
         </div>
       </KeyboardShell>
     )
@@ -193,13 +210,29 @@ export default function VirtualKeyboard() {
               ))}
             </div>
           ))}
-          {/* Clear below numpad */}
-          <button
-            onPointerDown={(e) => { e.preventDefault(); sendKey('CLEAR') }}
-            className="w-full py-2.5 rounded-xl bg-red-900/60 hover:bg-red-800 text-red-300 font-bold text-xs transition-colors active:scale-95"
-          >
-            Clear
-          </button>
+          {/* + / - action keys + Clear */}
+          <div className="flex gap-1.5">
+            <button
+              onPointerDown={(e) => { e.preventDefault(); dispatchFKey('+') }}
+              title="+ → Payment / Checkout"
+              className="flex-1 py-2.5 rounded-xl bg-green-700 hover:bg-green-600 text-white font-bold text-base transition-colors active:scale-95"
+            >
+              +
+            </button>
+            <button
+              onPointerDown={(e) => { e.preventDefault(); dispatchFKey('-') }}
+              title="− → Recall saved bill"
+              className="flex-1 py-2.5 rounded-xl bg-yellow-700 hover:bg-yellow-600 text-white font-bold text-base transition-colors active:scale-95"
+            >
+              −
+            </button>
+            <button
+              onPointerDown={(e) => { e.preventDefault(); sendKey('CLEAR') }}
+              className="flex-1 py-2.5 rounded-xl bg-red-900/60 hover:bg-red-800 text-red-300 font-bold text-xs transition-colors active:scale-95"
+            >
+              Clear
+            </button>
+          </div>
         </div>
 
       </div>
