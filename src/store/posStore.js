@@ -23,6 +23,7 @@ export const usePOSStore = create((set, get) => ({
   // UI
   theme: 'dark',
   showImages: false,
+  touchMode: false,
   isOnline: true,
   currentScreen: 'login', // 'login' | 'pos' | 'settings'
   syncStatus: 'idle',     // 'idle' | 'syncing' | 'done' | 'error'
@@ -73,6 +74,7 @@ export const usePOSStore = create((set, get) => ({
     get().setTheme(next)
   },
   setShowImages: (v) => set({ showImages: v }),
+  setTouchMode: (v) => set({ touchMode: v }),
   setOnline: (v) => set({ isOnline: v }),
   setCurrentScreen: (s) => set({ currentScreen: s }),
   setSyncStatus: (s) => set({ syncStatus: s }),

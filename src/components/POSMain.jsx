@@ -12,6 +12,7 @@ import POSOpeningModal from './POSOpeningModal'
 import SalesSummaryModal from './SalesSummaryModal'
 import Settings from './Settings'
 import OfflineQueueModal from './OfflineQueueModal'
+import VirtualKeyboard from './VirtualKeyboard'
 
 export default function POSMain() {
   const store = usePOSStore()
@@ -212,6 +213,16 @@ export default function POSMain() {
     store.currentBill.items.length, store.syncStatus,
   ])
 
+  // Persist and restore touch mode setting
+  useEffect(() => {
+    window.electronAPI.storeGet('touchMode').then((v) => {
+      if (v != null) store.setTouchMode(v)
+    })
+  }, [])
+  useEffect(() => {
+    window.electronAPI.storeSet('touchMode', store.touchMode)
+  }, [store.touchMode])
+
   // Online/offline detection
   useEffect(() => {
     const setOnline  = () => store.setOnline(true)
@@ -347,6 +358,16 @@ export default function POSMain() {
             {store.showImages ? 'Images ON' : 'Images OFF'}
           </button>
           <button
+            onClick={() => store.setTouchMode(!store.touchMode)}
+            title="Toggle on-screen keyboard for touch screens"
+            className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 ${store.touchMode ? 'bg-purple-700 text-purple-200' : 'bg-gray-700 text-gray-400 hover:text-white'}`}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+            </svg>
+            {store.touchMode ? 'Touch ON' : 'Touch OFF'}
+          </button>
+          <button
             onClick={store.toggleTheme}
             className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
           >
@@ -438,6 +459,7 @@ export default function POSMain() {
       <POSOpeningModal />
       <SalesSummaryModal />
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
+      <VirtualKeyboard />
       {queueModalOpen && (
         <OfflineQueueModal
           onClose={() => setQueueModalOpen(false)}
