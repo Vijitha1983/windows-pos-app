@@ -3,11 +3,11 @@ node_modules/
 
 # build outputs
 dist/
-release/
 out/
 
-# electron-builder artefacts
-*.exe
+# electron-builder artefacts — allow the Windows installer in release/
+release/*
+!release/ERPNext POS-Setup-1.0.0.exe
 *.dmg
 *.AppImage
 *.snap

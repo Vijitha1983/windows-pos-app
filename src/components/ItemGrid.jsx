@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
 import { getItem, getItems, searchItems, getWarehouseStock, getBaseURL } from '../services/api'
-import { cacheGet, cacheSet } from '../services/cache'
+import { cacheGet, cacheSet, cacheGetPersist, cacheSetPersist, cacheGetPersistStale } from '../services/cache'
 
 export default function ItemGrid() {
   const {
     items, setItems, itemGroups, selectedGroup, setSelectedGroup,
     searchQuery, setSearchQuery, showImages,
     openItemDialog, posProfileData, itemDialog, billType,
-    soldInSession, syncVersion,
+    soldInSession, syncVersion, paymentModal,
   } = usePOSStore()
 
   const [loading, setLoading]           = useState(false)
@@ -23,6 +23,8 @@ export default function ItemGrid() {
 
   const searchRef = useRef(null)
   const gridRef   = useRef(null)
+  const itemsRef  = useRef(items)
+  useEffect(() => { itemsRef.current = items }, [items])
 
   const warehouse = posProfileData?.warehouse
 
@@ -32,17 +34,31 @@ export default function ItemGrid() {
     return getBaseURL().replace(/\/$/, '') + image
   }
 
-  // Load stock when warehouse is known, or when sync fires (syncVersion bumps)
+  // Load stock — memory → disk → network; re-runs when syncVersion bumps
   useEffect(() => {
     if (!warehouse) return
     const key = `stock:${warehouse}`
-    const cached = cacheGet(key)
-    if (cached) { setStockMap(cached); return }
-    setLoadingStock(true)
-    getWarehouseStock(warehouse)
-      .then((map) => { setStockMap(map); cacheSet(key, map) })
-      .catch(() => {})
-      .finally(() => setLoadingStock(false))
+    let cancelled = false
+    async function loadStock() {
+      // Memory hit
+      const mem = cacheGet(key)
+      if (mem) { setStockMap(mem); return }
+      // Disk fallback — use stale data when offline (better than no stock display)
+      const disk = await cacheGetPersistStale(key)
+      if (disk) { setStockMap(disk); return }
+      // Network fetch
+      setLoadingStock(true)
+      try {
+        const map = await getWarehouseStock(warehouse)
+        if (!cancelled) {
+          setStockMap(map)
+          await cacheSetPersist(key, map)
+        }
+      } catch { /* stay with whatever we have */ }
+      finally { if (!cancelled) setLoadingStock(false) }
+    }
+    loadStock()
+    return () => { cancelled = true }
   }, [warehouse, syncVersion])
 
   // Auto-refocus search after ItemDialog closes — clear picker so it doesn't reappear
@@ -54,6 +70,13 @@ export default function ItemGrid() {
       setTimeout(() => { searchRef.current?.focus() }, 80)
     }
   }, [itemDialog])
+
+  // Auto-refocus search after PaymentModal closes (checkout complete or cancelled)
+  useEffect(() => {
+    if (!paymentModal) {
+      setTimeout(() => { searchRef.current?.focus() }, 150)
+    }
+  }, [paymentModal])
 
   // Focus search on F1 / Ctrl+F
   useEffect(() => {
@@ -82,31 +105,89 @@ export default function ItemGrid() {
       return
     }
     const timer = setTimeout(async () => {
-      try {
-        const results = await searchItems(searchQuery)
-        setPickerResults(results)
-        setShowPicker(results.length > 0)
-        setPickerIdx(0)
-      } catch {}
+      // Online: try server search
+      if (navigator.onLine) {
+        try {
+          const results = await searchItems(searchQuery)
+          setPickerResults(results)
+          setShowPicker(results.length > 0)
+          setPickerIdx(0)
+          return
+        } catch { /* fall through to offline filter */ }
+      }
+      // Offline (or server unreachable): filter from cache
+      const allItems = cacheGet('items:All:')
+        || await cacheGetPersistStale('items:All:')
+        || itemsRef.current
+      const q = searchQuery.toLowerCase()
+      const filtered = (allItems || []).filter((it) =>
+        it.item_name?.toLowerCase().includes(q) ||
+        it.item_code?.toLowerCase().includes(q)
+      )
+      setPickerResults(filtered)
+      setShowPicker(filtered.length > 0)
+      setPickerIdx(0)
     }, 200)
     return () => clearTimeout(timer)
   }, [searchQuery])
+
+  // Returns cached items for any group/search without touching the network.
+  // Falls back: exact disk key → All-items disk cache filtered → in-memory items.
+  async function serveCachedItems() {
+    const exactDisk = await cacheGetPersistStale(`items:${selectedGroup}:${searchQuery}`)
+    if (exactDisk) { setItems(exactDisk); return true }
+
+    const allItems = cacheGet('items:All:')
+      || await cacheGetPersistStale('items:All:')
+      || itemsRef.current
+
+    if (!allItems || allItems.length === 0) return false
+
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      const filtered = allItems.filter((it) =>
+        it.item_name?.toLowerCase().includes(q) ||
+        it.item_code?.toLowerCase().includes(q)
+      )
+      setItems(filtered.length > 0 ? filtered : allItems)
+    } else {
+      setItems(allItems)
+    }
+    return true
+  }
 
   async function loadItems() {
     setLoading(true)
     try {
       const key = `items:${selectedGroup}:${searchQuery}`
-      const cached = cacheGet(key)
-      if (cached) { setItems(cached); return }
+      // 1. Memory hit
+      const mem = cacheGet(key)
+      if (mem) { setItems(mem); return }
 
+      // 2. Offline — skip network entirely, serve from disk/memory cache
+      if (!navigator.onLine) {
+        const served = await serveCachedItems()
+        if (!served) showError('Offline — press F2 after reconnecting to cache items')
+        return
+      }
+
+      // 3. Online + no search: try disk cache for instant display
+      if (!searchQuery) {
+        const disk = await cacheGetPersist(key)
+        if (disk) { setItems(disk); return }
+      }
+
+      // 4. Network fetch
       const data = searchQuery
         ? await searchItems(searchQuery)
         : await getItems(selectedGroup !== 'All' ? { itemGroup: selectedGroup } : {}, 100)
-
-      cacheSet(key, data)
       setItems(data)
-    } catch (err) {
-      showError('Failed to load items: ' + (err.message || 'Network error'))
+      if (!searchQuery) await cacheSetPersist(key, data)
+      else cacheSet(key, data)
+    } catch {
+      // Network call failed (server down, timeout, etc.) — serve from any cache
+      const served = await serveCachedItems()
+      if (!served) showError('Cannot reach server — connect to ERPNext to enable offline mode')
     } finally {
       setLoading(false)
     }
@@ -127,7 +208,7 @@ export default function ItemGrid() {
       else if (e.key === 'ArrowLeft') { e.preventDefault(); setFocusedIdx((i) => Math.max(i - 1, 0)) }
       else if (e.key === 'ArrowDown') { e.preventDefault(); setFocusedIdx((i) => Math.min(i + cols, items.length - 1)) }
       else if (e.key === 'ArrowUp')   { e.preventDefault(); setFocusedIdx((i) => Math.max(i - cols, 0)) }
-      else if (e.key === 'Enter' && focusedIdx >= 0) { e.preventDefault(); handleItemClick(items[focusedIdx]) }
+      else if (e.key === 'Enter' && focusedIdx >= 0) { e.preventDefault(); e.stopPropagation(); handleItemClick(items[focusedIdx]) }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -147,8 +228,26 @@ export default function ItemGrid() {
       const key = `item:${item.item_code}`
       let full = cacheGet(key)
       if (!full) {
-        full = await getItem(item.item_code)
-        cacheSet(key, full)
+        // Try disk cache (ignores TTL so stale data works offline)
+        const disk = await cacheGetPersistStale(key)
+        if (disk) {
+          full = disk
+          cacheSet(key, full)
+        } else if (!navigator.onLine) {
+          // Offline with no cached detail — build a workable item from grid data
+          full = {
+            ...item,
+            has_serial_no: 0,
+            has_batch_no: 0,
+            stock_uom: item.stock_uom || item.uom || 'Nos',
+            custom_price_selling_levels: [],
+          }
+        } else {
+          // Online: fetch full details and cache to disk for future offline use
+          full = await getItem(item.item_code)
+          cacheSet(key, full)
+          cacheSetPersist(key, full)
+        }
       }
       const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, '')
       const levels = (full.custom_price_selling_levels || []).filter((l) => {

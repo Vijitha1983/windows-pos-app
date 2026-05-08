@@ -451,12 +451,16 @@ export default function Settings({ onClose }) {
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-700 flex items-center justify-between">
-          {saved && <span className="text-green-400 text-sm">Saved ✓</span>}
-          <div className="flex-1" />
+        <div className="px-6 py-4 border-t border-gray-700 flex items-center justify-between gap-4">
+          <div className="flex flex-col">
+            {saved && <span className="text-green-400 text-sm">Saved ✓</span>}
+            <span className="text-gray-600 text-xs select-none">
+              ERPNext POS v1.0.0 &nbsp;·&nbsp; &copy; 2025 Vijitha Rajapaksha. All rights reserved.
+            </span>
+          </div>
           <button
             onClick={handleLogout}
-            className="bg-red-800 hover:bg-red-700 text-red-200 text-sm px-4 py-2 rounded-lg transition-colors"
+            className="bg-red-800 hover:bg-red-700 text-red-200 text-sm px-4 py-2 rounded-lg transition-colors flex-shrink-0"
           >
             Sign Out
           </button>

@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { usePOSStore } from '../store/posStore'
 import { getItemGroups, getItems, getOpenPOSSession, getWarehouseStock } from '../services/api'
 import { signOut } from '../services/auth'
-import { cacheGet, cacheSet, cacheClear, getQueuedInvoices } from '../services/cache'
+import { cacheGet, cacheSet, cacheClear, cacheGetPersist, cacheSetPersist, cacheGetPersistStale, cacheClearPersist, getQueuedInvoices } from '../services/cache'
 import ItemGrid from './ItemGrid'
 import BillTable from './BillTable'
 import AddItemBar from './AddItemBar'
@@ -11,6 +11,7 @@ import PaymentModal from './PaymentModal'
 import POSOpeningModal from './POSOpeningModal'
 import SalesSummaryModal from './SalesSummaryModal'
 import Settings from './Settings'
+import OfflineQueueModal from './OfflineQueueModal'
 
 export default function POSMain() {
   const store = usePOSStore()
@@ -19,6 +20,8 @@ export default function POSMain() {
   const [itemsHidden, setItemsHidden]   = useState(false)
   const [syncProgress, setSyncProgress] = useState(0)
   const [syncError, setSyncError]       = useState('')
+  const [queueModalOpen, setQueueModalOpen] = useState(false)
+  const wasOnline = useRef(store.isOnline)
   const now = new Date()
 
   async function handleSync() {
@@ -27,28 +30,32 @@ export default function POSMain() {
     setSyncProgress(0)
     setSyncError('')
     try {
-      // Wipe all in-memory caches so every fetch below is fresh
+      // Wipe memory cache; disk cache is overwritten on success below
       cacheClear()
       setSyncProgress(10)
 
       // Step 1: item groups
       const groups = await getItemGroups()
       store.setItemGroups(groups)
-      cacheSet('itemGroups', groups)
+      await cacheSetPersist('itemGroups', groups)
       setSyncProgress(33)
 
-      // Step 2: items for current group
-      const filters = store.selectedGroup !== 'All' ? { itemGroup: store.selectedGroup } : {}
-      const data = await getItems(filters, 100)
-      store.setItems(data)
-      cacheSet(`items:${store.selectedGroup}:`, data)
+      // Step 2: always cache All items (needed for offline search/browsing)
+      const allData = await getItems({}, 100)
+      store.setItems(allData)
+      await cacheSetPersist('items:All:', allData)
+      // Also cache the selected group if different from All
+      if (store.selectedGroup !== 'All') {
+        const groupData = await getItems({ itemGroup: store.selectedGroup }, 100)
+        await cacheSetPersist(`items:${store.selectedGroup}:`, groupData)
+      }
       setSyncProgress(66)
 
       // Step 3: warehouse stock (ItemGrid re-fetches via syncVersion bump)
       const warehouse = store.posProfileData?.warehouse
       if (warehouse) {
         const map = await getWarehouseStock(warehouse)
-        cacheSet(`stock:${warehouse}`, map)
+        await cacheSetPersist(`stock:${warehouse}`, map)
       }
       setSyncProgress(100)
 
@@ -75,21 +82,44 @@ export default function POSMain() {
     return () => clearInterval(id)
   }, [])
 
-  // Load item groups
+  // Load item groups + pre-cache All items for offline use
   useEffect(() => {
     async function load() {
-      const cached = cacheGet('itemGroups')
-      if (cached) { store.setItemGroups(cached); return }
+      // Serve from disk immediately if available
+      const cachedGroups = await cacheGetPersist('itemGroups')
+      if (cachedGroups) store.setItemGroups(cachedGroups)
+
+      // Refresh from network in background (needed to keep cache warm)
       try {
         const groups = await getItemGroups()
         store.setItemGroups(groups)
-        cacheSet('itemGroups', groups)
-      } catch (err) {
-        console.error('Failed to load item groups', err)
-      }
+        await cacheSetPersist('itemGroups', groups)
+
+        // Pre-cache All items so offline search always has data
+        const existingItems = await cacheGetPersist('items:All:')
+        if (!existingItems) {
+          const allItems = await getItems({}, 100)
+          await cacheSetPersist('items:All:', allItems)
+        }
+      } catch { /* offline on startup — disk cache already served above */ }
     }
     load()
   }, [])
+
+  // Auto-sync queued invoices silently when connection is restored
+  useEffect(() => {
+    const justCameOnline = store.isOnline && !wasOnline.current
+    wasOnline.current = store.isOnline
+    if (!justCameOnline) return
+
+    async function autoSync() {
+      const queue = await getQueuedInvoices()
+      if (queue.length === 0) return
+      // Open the queue modal so cashier sees what's happening
+      setQueueModalOpen(true)
+    }
+    autoSync()
+  }, [store.isOnline])
 
   // Check for an existing open POS session; if none, prompt to open one
   useEffect(() => {
@@ -98,17 +128,26 @@ export default function POSMain() {
       try {
         const session = await getOpenPOSSession(store.posProfile)
         if (session) {
-          // Restore existing session
           const cash = (session.balance_details || [])
             .find((b) => b.mode_of_payment?.toLowerCase().includes('cash'))
             ?.opening_amount || 0
           store.setPosOpeningEntry(session.name, cash, session.user, session.period_start_date)
+          // Cache session so it can be restored when offline
+          cacheSetPersist(`posSession:${store.posProfile}`, {
+            name: session.name, cash, user: session.user,
+            period_start_date: session.period_start_date,
+          })
         } else {
           store.setShowOpeningModal(true)
         }
       } catch {
-        // Can't check (network issue etc.) — show opening modal anyway
-        store.setShowOpeningModal(true)
+        // Network failed — restore last known session from disk cache
+        const cached = await cacheGetPersistStale(`posSession:${store.posProfile}`)
+        if (cached) {
+          store.setPosOpeningEntry(cached.name, cached.cash, cached.user, cached.period_start_date)
+        } else {
+          store.setShowOpeningModal(true)
+        }
       }
     }
     checkSession()
@@ -148,7 +187,13 @@ export default function POSMain() {
       } else if (e.key === 'F8') {
         e.preventDefault()
         store.toggleBillPaymentType()
+      } else if (e.key === 'F3') {
+        e.preventDefault()
+        store.holdBill()
       } else if (e.key === 'F12') {
+        e.preventDefault()
+        if (store.currentBill.items.length > 0) store.openPaymentModal()
+      } else if (e.key === '+' || e.key === 'Add') {
         e.preventDefault()
         if (store.currentBill.items.length > 0) store.openPaymentModal()
       } else if (e.key === 'F1' && !inInput) {
@@ -204,9 +249,16 @@ export default function POSMain() {
             </span>
           </div>
           {queueCount > 0 && (
-            <div className="flex items-center gap-1 bg-yellow-900/50 border border-yellow-700 rounded px-2 py-0.5">
+            <button
+              onClick={() => setQueueModalOpen(true)}
+              className="flex items-center gap-1 bg-yellow-900/50 border border-yellow-700 hover:border-yellow-500 rounded px-2 py-0.5 transition-colors"
+              title="View and sync offline invoices"
+            >
+              <svg className="w-3 h-3 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
               <span className="text-yellow-400 text-xs">{queueCount} queued</span>
-            </div>
+            </button>
           )}
           {/* Session indicator */}
           {store.posOpeningEntry ? (
@@ -386,6 +438,12 @@ export default function POSMain() {
       <POSOpeningModal />
       <SalesSummaryModal />
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
+      {queueModalOpen && (
+        <OfflineQueueModal
+          onClose={() => setQueueModalOpen(false)}
+          onQueueChange={(n) => setQueueCount(n)}
+        />
+      )}
 
       {/* ── Sync lock overlay ────────────────────────────────────────── */}
       {store.syncStatus === 'syncing' && (

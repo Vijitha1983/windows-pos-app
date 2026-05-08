@@ -88,6 +88,9 @@ export default function BillTable() {
         e.preventDefault()
         discountInputRef.current?.focus()
         discountInputRef.current?.select()
+      } else if (e.key === '-' || e.key === 'Subtract') {
+        e.preventDefault()
+        setShowHeld(true)
       }
     }
     window.addEventListener('keydown', handler)
@@ -329,21 +332,22 @@ export default function BillTable() {
 
         {/* Row 1: Draft Save + Recall side by side */}
         <div className="grid grid-cols-2 gap-2">
-          {/* Draft Save — save current bill to drafts */}
+          {/* Draft Save (F3) — save current bill to drafts */}
           <button
             onClick={holdBill}
             disabled={items.length === 0}
             className="flex flex-col items-center justify-center bg-amber-700 hover:bg-amber-600 active:bg-amber-800 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-amber-100 rounded-xl py-2.5 px-3 transition-colors"
           >
-            <span className="font-semibold text-sm">Draft Save</span>
+            <span className="font-mono text-xs opacity-60 leading-none">F3</span>
+            <span className="font-semibold text-sm mt-0.5">Draft Save</span>
           </button>
 
-          {/* Recall (F3) — load a saved draft */}
+          {/* Recall — load a saved draft */}
           <button
             onClick={() => setShowHeld(true)}
             className="flex flex-col items-center justify-center bg-violet-700 hover:bg-violet-600 active:bg-violet-800 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-violet-100 rounded-xl py-2.5 px-3 transition-colors relative"
           >
-            <span className="font-mono text-xs opacity-60 leading-none">F3</span>
+            <span className="font-mono text-xs opacity-60 leading-none">[-]</span>
             <span className="font-semibold text-sm mt-0.5">Recall</span>
             {heldBills.length > 0 && (
               <span className="absolute top-1.5 right-2 bg-white text-violet-800 text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
@@ -378,8 +382,8 @@ export default function BillTable() {
           className="w-full bg-green-600 hover:bg-green-500 active:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
         >
           {items.length > 0
-            ? `F12 — Checkout  ·  ${fmt(grandTotal)}`
-            : 'F12 — Checkout'}
+            ? `[+] / F12 — Checkout  ·  ${fmt(grandTotal)}`
+            : '[+] / F12 — Checkout'}
         </button>
       </div>
 
