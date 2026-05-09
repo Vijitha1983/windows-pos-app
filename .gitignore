@@ -7,7 +7,6 @@ out/
 
 # electron-builder artefacts — allow the Windows installer in release/
 release/*
-!release/ERPNext POS-Setup-1.0.0.exe
 *.dmg
 *.AppImage
 *.snap
@@ -18,6 +17,9 @@ release/*
 .env
 .env.*
 *.local
+
+# License serial key CSVs — never publish these
+serials-pack-*.csv
 
 # editor
 .vscode/

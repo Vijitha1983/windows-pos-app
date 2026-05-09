@@ -1,22 +1,37 @@
-appId: com.erpnext.pos
+appId: com.hsp.erpnext.pos
 productName: ERPNext POS
+copyright: "Copyright © 2025 Vijitha Rajapaksha. All rights reserved."
+asar: true
+
 directories:
   output: release
   buildResources: public
+
 files:
   - dist/**/*
   - electron/**/*
   - node_modules/**/*
+  - package.json
+
 win:
   target:
     - target: nsis
       arch:
         - x64
   icon: public/icon.ico
+  artifactName: "${productName}-Setup-${version}.${ext}"
+  requestedExecutionLevel: asInvoker
+
 nsis:
   oneClick: false
-  perMachine: false
+  allowElevation: true
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: ERPNext POS
+  installerIcon: public/icon.ico
+  uninstallerIcon: public/icon.ico
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  license: null
+  welcomePage: false

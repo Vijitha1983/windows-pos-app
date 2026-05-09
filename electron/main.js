@@ -4,6 +4,7 @@ const https = require('https')
 const http = require('http')
 const fs   = require('fs')
 const Store = require('electron-store')
+const { checkLicense, activateLicense } = require('./license')
 
 let mainWin = null   // reference used by cash-drawer IPC
 
@@ -189,6 +190,10 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+// ─── IPC: License ─────────────────────────────────────────────────────────────
+ipcMain.handle('license-check',    ()         => checkLicense(store))
+ipcMain.handle('license-activate', (_, serial) => activateLicense(store, serial))
 
 // ─── IPC: electron-store ──────────────────────────────────────────────────────
 ipcMain.handle('store-get', (_, key) => store.get(key))

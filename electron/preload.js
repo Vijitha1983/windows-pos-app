@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Cash drawer kick via ESC/POS to COM/LPT port
   openCashDrawer: (port) => ipcRenderer.invoke('open-cash-drawer', port),
 
+  // License
+  licenseCheck:    ()       => ipcRenderer.invoke('license-check'),
+  licenseActivate: (serial) => ipcRenderer.invoke('license-activate', serial),
+
   // Window controls
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),

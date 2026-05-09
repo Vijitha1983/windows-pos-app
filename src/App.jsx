@@ -6,6 +6,7 @@ import { getQueuedInvoices, removeQueuedInvoice } from './services/cache'
 import { submitPOSInvoice } from './services/api'
 import Login from './components/Login'
 import POSMain from './components/POSMain'
+import LicenseGate from './components/LicenseGate'
 
 export default function App() {
   const store = usePOSStore()
@@ -70,7 +71,6 @@ export default function App() {
     if (store.isOnline && store.isLoggedIn) syncQueue()
   }, [store.isOnline, store.isLoggedIn])
 
-  if (store.currentScreen === 'login') return <Login />
-  if (store.currentScreen === 'pos') return <POSMain />
-  return <Login />
+  const screen = store.currentScreen === 'pos' ? <POSMain /> : <Login />
+  return <LicenseGate>{screen}</LicenseGate>
 }

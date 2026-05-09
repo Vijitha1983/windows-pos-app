@@ -209,11 +209,18 @@ export default function PaymentModal() {
       return
     }
 
-    // Fallback: try Mode of Payment lookup → account_name search
+    // 2nd priority: full account name stored in settings
+    const storedAccount = await window.electronAPI.storeGet('giftAccount') || ''
+    if (storedAccount) {
+      setGiftAccount(storedAccount)
+      setTimeout(() => giftVoucherRef.current?.focus(), 40)
+      return
+    }
+
+    // Fallback: try Mode of Payment lookup
     setGiftAccResolving(true)
-    const company          = posProfileData?.company || ''
-    const accountShortName = await window.electronAPI.storeGet('giftAccountShort') || ''
-    const account = await resolveGiftCardAccount(giftModeName, company, accountShortName)
+    const company = posProfileData?.company || ''
+    const account = await resolveGiftCardAccount(giftModeName, company, '')
     setGiftAccount(account)
     setGiftAccResolving(false)
     setTimeout(() => giftVoucherRef.current?.focus(), 40)

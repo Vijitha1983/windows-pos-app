@@ -11,65 +11,27 @@ export default function Settings({ onClose }) {
   const [saved, setSaved] = useState(false)
   const [urlInput, setUrlInput] = useState(store.erpnextUrl)
 
-  // GL account selectors
-  const [cashAccounts,       setCashAccounts]       = useState([])
-  const [bankAccounts,       setBankAccounts]       = useState([])
-  const [kokoAccounts,       setKokoAccounts]       = useState([])
-  const [loadingCash,        setLoadingCash]        = useState(false)
-  const [loadingBank,        setLoadingBank]        = useState(false)
-  const [loadingKoko,        setLoadingKoko]        = useState(false)
-  const [savedCashAccount,   setSavedCashAccount]   = useState('')
-  const [savedBankAccount,   setSavedBankAccount]   = useState('')
-  const [savedKokoAccount,   setSavedKokoAccount]   = useState('')
+  const [giftAccounts,     setGiftAccounts]     = useState([])
+  const [loadingGiftAcc,   setLoadingGiftAcc]   = useState(false)
+  const [savedGiftAccount, setSavedGiftAccount] = useState('')
 
   useEffect(() => {
-    window.electronAPI.storeGet('cashAccount').then((v) => setSavedCashAccount(v || ''))
-    window.electronAPI.storeGet('bankAccount').then((v) => setSavedBankAccount(v || ''))
-    window.electronAPI.storeGet('kokoAccount').then((v) => setSavedKokoAccount(v || ''))
+    window.electronAPI.storeGet('giftAccount').then((v) => setSavedGiftAccount(v || ''))
   }, [])
 
-  async function loadCashAccounts() {
-    setLoadingCash(true)
+
+  async function loadGiftAccounts() {
+    setLoadingGiftAcc(true)
     try {
-      const list = await getGLAccounts('Cash', store.posProfileData?.company)
-      setCashAccounts(list)
+      const list = await getGLAccounts(null, store.posProfileData?.company)
+      setGiftAccounts(list)
     } catch {}
-    setLoadingCash(false)
+    setLoadingGiftAcc(false)
   }
 
-  async function loadBankAccounts() {
-    setLoadingBank(true)
-    try {
-      const list = await getGLAccounts('Bank', store.posProfileData?.company)
-      setBankAccounts(list)
-    } catch {}
-    setLoadingBank(false)
-  }
-
-  async function loadKokoAccounts() {
-    setLoadingKoko(true)
-    try {
-      const list = await getGLAccounts('Bank', store.posProfileData?.company)
-      setKokoAccounts(list)
-    } catch {}
-    setLoadingKoko(false)
-  }
-
-  async function selectKokoAccount(name) {
-    await window.electronAPI.storeSet('kokoAccount', name)
-    setSavedKokoAccount(name)
-    setSaved(true); setTimeout(() => setSaved(false), 1500)
-  }
-
-  async function selectCashAccount(name) {
-    await window.electronAPI.storeSet('cashAccount', name)
-    setSavedCashAccount(name)
-    setSaved(true); setTimeout(() => setSaved(false), 1500)
-  }
-
-  async function selectBankAccount(name) {
-    await window.electronAPI.storeSet('bankAccount', name)
-    setSavedBankAccount(name)
+  async function selectGiftAccount(name) {
+    await window.electronAPI.storeSet('giftAccount', name)
+    setSavedGiftAccount(name)
     setSaved(true); setTimeout(() => setSaved(false), 1500)
   }
 
@@ -208,137 +170,6 @@ export default function Settings({ onClose }) {
             <h3 className="text-gray-300 font-medium mb-2 text-sm uppercase tracking-wide">Payment Methods</h3>
             <div className="space-y-4">
 
-              {/* Cash GL Account */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-gray-400 text-sm">Cash — GL Account</h4>
-                  <button
-                    onClick={loadCashAccounts}
-                    disabled={loadingCash}
-                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
-                  >
-                    {loadingCash ? 'Loading…' : 'Load accounts'}
-                  </button>
-                </div>
-                <div className="bg-gray-700/50 rounded-lg px-4 py-2 text-sm text-white mb-2">
-                  Current: <span className="text-green-400">{savedCashAccount || <span className="text-gray-500">Not set</span>}</span>
-                </div>
-                {cashAccounts.length > 0 && (
-                  <div className="space-y-1 max-h-36 overflow-y-auto">
-                    {cashAccounts.map((a) => (
-                      <button
-                        key={a.name}
-                        onClick={() => selectCashAccount(a.name)}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          savedCashAccount === a.name
-                            ? 'bg-green-700 text-white'
-                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                        }`}
-                      >
-                        {a.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Bank / Card GL Account */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-gray-400 text-sm">Bank / Credit Card — GL Account</h4>
-                  <button
-                    onClick={loadBankAccounts}
-                    disabled={loadingBank}
-                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
-                  >
-                    {loadingBank ? 'Loading…' : 'Load accounts'}
-                  </button>
-                </div>
-                <div className="bg-gray-700/50 rounded-lg px-4 py-2 text-sm text-white mb-2">
-                  Current: <span className="text-green-400">{savedBankAccount || <span className="text-gray-500">Not set</span>}</span>
-                </div>
-                {bankAccounts.length > 0 && (
-                  <div className="space-y-1 max-h-36 overflow-y-auto">
-                    {bankAccounts.map((a) => (
-                      <button
-                        key={a.name}
-                        onClick={() => selectBankAccount(a.name)}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          savedBankAccount === a.name
-                            ? 'bg-green-700 text-white'
-                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                        }`}
-                      >
-                        {a.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Koko Pay GL Account */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-gray-400 text-sm">Koko Pay — GL Account</h4>
-                  <button
-                    onClick={loadKokoAccounts}
-                    disabled={loadingKoko}
-                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
-                  >
-                    {loadingKoko ? 'Loading…' : 'Load accounts'}
-                  </button>
-                </div>
-                <div className="bg-gray-700/50 rounded-lg px-4 py-2 text-sm text-white mb-2">
-                  Current: <span className="text-orange-400">{savedKokoAccount || <span className="text-gray-500">Not set</span>}</span>
-                </div>
-                {kokoAccounts.length > 0 && (
-                  <div className="space-y-1 max-h-36 overflow-y-auto">
-                    {kokoAccounts.map((a) => (
-                      <button
-                        key={a.name}
-                        onClick={() => selectKokoAccount(a.name)}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          savedKokoAccount === a.name
-                            ? 'bg-orange-700 text-white'
-                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                        }`}
-                      >
-                        {a.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Koko Pay mode name */}
-              <div className="space-y-1">
-                <label className="block text-sm text-gray-400">Koko Pay — ERPNext Mode of Payment Name</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="e.g. Bank Transfer"
-                    defaultValue=""
-                    id="kokoModeNameInput"
-                    onFocus={async (e) => {
-                      if (!e.target.value) {
-                        const v = await window.electronAPI.storeGet('kokoModeName')
-                        e.target.value = v || ''
-                      }
-                    }}
-                    className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-orange-500"
-                  />
-                  <button
-                    onClick={async () => {
-                      const val = document.getElementById('kokoModeNameInput').value.trim()
-                      await window.electronAPI.storeSet('kokoModeName', val)
-                      setSaved(true); setTimeout(() => setSaved(false), 1500)
-                    }}
-                    className="bg-orange-700 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm transition-colors"
-                  >Save</button>
-                </div>
-                <p className="text-gray-600 text-xs">Must match exactly the Mode of Payment name in ERPNext. e.g. <span className="font-mono text-gray-500">Bank Transfer</span></p>
-              </div>
-
               {/* Gift Card mode name */}
               <div className="space-y-1">
                 <label className="block text-sm text-gray-400">Gift Card — Mode of Payment Name</label>
@@ -368,37 +199,38 @@ export default function Settings({ onClose }) {
                 <p className="text-gray-600 text-xs">Must match exactly the name in ERPNext <span className="font-mono">Accounts → Mode of Payment</span>.</p>
               </div>
 
-              {/* Gift Card account short name */}
-              <div className="space-y-1">
-                <label className="block text-sm text-gray-400">Gift Card — Account Name <span className="text-gray-600">(no number prefix)</span></label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Gift Card"
-                    defaultValue=""
-                    id="giftAccountShortInput"
-                    onFocus={async (e) => {
-                      if (!e.target.value) {
-                        const v = await window.electronAPI.storeGet('giftAccountShort')
-                        e.target.value = v || ''
-                      }
-                    }}
-                    className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                  />
+              {/* Gift Card GL Account */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-gray-400 text-sm">Gift Card — GL Account</h4>
                   <button
-                    onClick={async () => {
-                      const val = document.getElementById('giftAccountShortInput').value.trim()
-                      await window.electronAPI.storeSet('giftAccountShort', val)
-                      setSaved(true); setTimeout(() => setSaved(false), 1500)
-                    }}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
-                  >Save</button>
+                    onClick={loadGiftAccounts}
+                    disabled={loadingGiftAcc}
+                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                  >
+                    {loadingGiftAcc ? 'Loading…' : 'Load accounts'}
+                  </button>
                 </div>
-                <p className="text-gray-600 text-xs">
-                  Just the account name — no number, no company suffix.<br/>
-                  e.g. your account is <span className="font-mono text-gray-500">200417 - Gift Card - IT</span>, enter <span className="font-mono text-gray-500">Gift Card</span>.<br/>
-                  Works even when the account number changes.
-                </p>
+                <div className="bg-gray-700/50 rounded-lg px-4 py-2 text-sm text-white mb-2">
+                  Current: <span className="text-blue-400">{savedGiftAccount || <span className="text-gray-500">Not set</span>}</span>
+                </div>
+                {giftAccounts.length > 0 && (
+                  <div className="space-y-1 max-h-36 overflow-y-auto">
+                    {giftAccounts.map((a) => (
+                      <button
+                        key={a.name}
+                        onClick={() => selectGiftAccount(a.name)}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                          savedGiftAccount === a.name
+                            ? 'bg-blue-700 text-white'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        }`}
+                      >
+                        {a.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </section>
