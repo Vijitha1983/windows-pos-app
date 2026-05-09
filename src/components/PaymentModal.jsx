@@ -542,7 +542,8 @@ export default function PaymentModal() {
         const invoiceData = buildCreditInvoice()
         const draft = await createSalesInvoice(invoiceData)
         if (!draft?.name) throw new Error('Sales Invoice created but no name returned')
-        await submitSalesInvoice(draft.name)
+        // Pass full draft doc — avoids an extra GET round-trip before submit
+        await submitSalesInvoice(draft)
         printReceipt(draft.name)
         finishCheckout(0)
       } else {
@@ -552,7 +553,8 @@ export default function PaymentModal() {
         if (!isOnline) throw new Error('offline')
         const draft = await createPOSInvoice(invoiceData)
         if (!draft?.name) throw new Error('Invoice created but no name returned')
-        await submitPOSInvoice(draft.name)
+        // Pass full draft doc — avoids an extra GET round-trip before submit
+        await submitPOSInvoice(draft)
         printReceipt(draft.name)
         kickCashDrawer()
         finishCheckout(changeAmt)

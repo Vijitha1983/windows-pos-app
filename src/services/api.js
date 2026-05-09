@@ -41,7 +41,13 @@ async function request(method, path, body = null, extraHeaders = {}) {
           .replace(/\s+/g, ' ').trim()
       } catch {}
     }
-    if (!msg) msg = result.data?.message || result.data?.exc_type || `HTTP ${result.status}`
+    if (!msg) {
+      if (result.status === 0) {
+        msg = 'Cannot connect to server. Check the URL (include https://) and your network connection.'
+      } else {
+        msg = result.data?.message || result.data?.exc_type || `Server error (HTTP ${result.status})`
+      }
+    }
     const err = new Error(msg)
     err.status = result.status
     err.response = { data: result.data, status: result.status }
@@ -122,52 +128,44 @@ export async function resolveGiftCardAccount(modeName, company, accountShortName
 // ─── Category Wise Sales ─────────────────────────────────────────────────────
 
 // Returns { [item_group]: total_amount } for given POS + credit Sales invoice names.
+// Uses bulk child-table queries (2 calls total) instead of fetching each invoice individually.
 export async function getCategoryWiseSales(invoiceNames, creditInvoiceNames = []) {
   if ((!invoiceNames || invoiceNames.length === 0) && creditInvoiceNames.length === 0) return {}
 
-  const allRows = []
-  const batchSize = 10
+  // Fetch all invoice line items in two parallel calls via child table resources
+  const [posItemsRes, siItemsRes] = await Promise.all([
+    invoiceNames.length > 0
+      ? request('GET', '/api/resource/POS Invoice Item' + qs({
+          filters:           JSON.stringify([['parent', 'in', invoiceNames]]),
+          fields:            JSON.stringify(['item_code', 'item_group', 'amount']),
+          limit_page_length: 2000,
+        })).catch(() => ({ data: [] }))
+      : Promise.resolve({ data: [] }),
+    creditInvoiceNames.length > 0
+      ? request('GET', '/api/resource/Sales Invoice Item' + qs({
+          filters:           JSON.stringify([['parent', 'in', creditInvoiceNames]]),
+          fields:            JSON.stringify(['item_code', 'item_group', 'amount']),
+          limit_page_length: 2000,
+        })).catch(() => ({ data: [] }))
+      : Promise.resolve({ data: [] }),
+  ])
 
-  // Fetch POS Invoices
-  for (let i = 0; i < invoiceNames.length; i += batchSize) {
-    const batch = invoiceNames.slice(i, i + batchSize)
-    await Promise.all(batch.map(async (name) => {
-      try {
-        const data = await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(name)}`)
-        for (const item of data.data?.items || []) {
-          if (item.item_code && item.amount > 0)
-            allRows.push({ item_code: item.item_code, item_group: item.item_group || null, amount: item.amount })
-        }
-      } catch {}
-    }))
-  }
-
-  // Fetch credit Sales Invoices
-  for (let i = 0; i < creditInvoiceNames.length; i += batchSize) {
-    const batch = creditInvoiceNames.slice(i, i + batchSize)
-    await Promise.all(batch.map(async (name) => {
-      try {
-        const data = await request('GET', `/api/resource/Sales Invoice/${encodeURIComponent(name)}`)
-        for (const item of data.data?.items || []) {
-          if (item.item_code && item.amount > 0)
-            allRows.push({ item_code: item.item_code, item_group: item.item_group || null, amount: item.amount })
-        }
-      } catch {}
-    }))
-  }
+  const allRows = [
+    ...(posItemsRes.data || []),
+    ...(siItemsRes.data || []),
+  ]
+    .filter((r) => r.item_code && r.amount > 0)
+    .map((r) => ({ item_code: r.item_code, item_group: r.item_group || null, amount: r.amount }))
 
   if (allRows.length === 0) return {}
 
-  // Step 2 — for any rows where item_group wasn't stored on the invoice,
-  //           look it up from Item doctype
-  const missing = [...new Set(
-    allRows.filter((r) => !r.item_group).map((r) => r.item_code)
-  )]
+  // For any rows where item_group wasn't stored on the invoice, look it up from Item doctype
+  const missing = [...new Set(allRows.filter((r) => !r.item_group).map((r) => r.item_code))]
   if (missing.length > 0) {
     try {
       const data = await request('GET', '/api/resource/Item' + qs({
-        filters:          JSON.stringify([['name', 'in', missing]]),
-        fields:           JSON.stringify(['name', 'item_group']),
+        filters:           JSON.stringify([['name', 'in', missing]]),
+        fields:            JSON.stringify(['name', 'item_group']),
         limit_page_length: missing.length + 10,
       }))
       const map = {}
@@ -180,7 +178,7 @@ export async function getCategoryWiseSales(invoiceNames, creditInvoiceNames = []
     } catch {}
   }
 
-  // Step 3 — aggregate by item_group
+  // Aggregate by item_group
   const result = {}
   for (const row of allRows) {
     if (row.item_group) {
@@ -397,9 +395,11 @@ export async function createSalesInvoice(invoiceData) {
   return data.data
 }
 
-export async function submitSalesInvoice(docName) {
-  const full = await request('GET', `/api/resource/Sales Invoice/${encodeURIComponent(docName)}`)
-  const data = await request('POST', '/api/method/frappe.client.submit', { doc: full.data })
+export async function submitSalesInvoice(docOrName) {
+  const doc = typeof docOrName === 'string'
+    ? (await request('GET', `/api/resource/Sales Invoice/${encodeURIComponent(docOrName)}`)).data
+    : docOrName
+  const data = await request('POST', '/api/method/frappe.client.submit', { doc })
   return data.message || data
 }
 
@@ -411,11 +411,15 @@ export async function createPOSInvoice(invoiceData) {
   return data.data
 }
 
-// Step 2: submit the draft — re-fetch first to get the server's `modified` timestamp.
-// Passing only { doctype, name } causes TimestampMismatchError on some ERPNext versions.
-export async function submitPOSInvoice(docName) {
-  const full = await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(docName)}`)
-  const data = await request('POST', '/api/method/frappe.client.submit', { doc: full.data })
+// Step 2: submit the draft.
+// Accepts either the full doc object returned by createPOSInvoice (fast path — no extra
+// GET needed because the create response already contains modified timestamp) or a name
+// string (slow fallback that re-fetches).
+export async function submitPOSInvoice(docOrName) {
+  const doc = typeof docOrName === 'string'
+    ? (await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(docOrName)}`)).data
+    : docOrName
+  const data = await request('POST', '/api/method/frappe.client.submit', { doc })
   return data.message || data
 }
 
@@ -491,7 +495,6 @@ export async function createPOSOpeningEntry(posProfile, company, user, paymentMe
 export async function getTodayInvoiceSummary(posProfile, sessionStartDate, username) {
   const today = new Date().toISOString().split('T')[0]
 
-  // ── POS Invoices (cash/card sales) ───────────────────────────────────────
   const posFilters = [
     ['pos_profile', '=', posProfile],
     ['posting_date', '=', today],
@@ -499,15 +502,6 @@ export async function getTodayInvoiceSummary(posProfile, sessionStartDate, usern
   ]
   if (sessionStartDate) posFilters.push(['creation', '>=', sessionStartDate])
 
-  const invoicesRes = await request('GET', '/api/resource/POS Invoice' + qs({
-    filters: JSON.stringify(posFilters),
-    fields: JSON.stringify(['name', 'grand_total', 'customer', 'consolidated_invoice']),
-    limit_page_length: 500,
-    order_by: 'creation desc',
-  }))
-  const invoices = invoicesRes.data || []
-
-  // ── Credit Sales Invoices (is_pos=0, created by this cashier this session) ─
   const siFilters = [
     ['posting_date', '=', today],
     ['docstatus',    '=', 1],
@@ -516,16 +510,24 @@ export async function getTodayInvoiceSummary(posProfile, sessionStartDate, usern
   if (sessionStartDate) siFilters.push(['creation', '>=', sessionStartDate])
   if (username) siFilters.push(['owner', '=', username])
 
-  let creditInvoices = []
-  try {
-    const siRes = await request('GET', '/api/resource/Sales Invoice' + qs({
-      filters: JSON.stringify(siFilters),
-      fields: JSON.stringify(['name', 'grand_total', 'customer']),
+  // Fetch POS invoices and credit invoices in parallel
+  const [invoicesRes, siRes] = await Promise.all([
+    request('GET', '/api/resource/POS Invoice' + qs({
+      filters:           JSON.stringify(posFilters),
+      fields:            JSON.stringify(['name', 'grand_total', 'customer', 'consolidated_invoice']),
       limit_page_length: 500,
-      order_by: 'creation desc',
-    }))
-    creditInvoices = siRes.data || []
-  } catch { /* offline or permission issue — skip credit */ }
+      order_by:          'creation desc',
+    })),
+    request('GET', '/api/resource/Sales Invoice' + qs({
+      filters:           JSON.stringify(siFilters),
+      fields:            JSON.stringify(['name', 'grand_total', 'customer']),
+      limit_page_length: 500,
+      order_by:          'creation desc',
+    })).catch(() => ({ data: [] })),  // offline or permission issue — skip credit
+  ])
+
+  const invoices       = invoicesRes.data || []
+  const creditInvoices = siRes.data || []
 
   const creditTotal = creditInvoices.reduce((s, i) => s + (i.grand_total || 0), 0)
   const totalSales  = invoices.reduce((s, i) => s + (i.grand_total || 0), 0) + creditTotal

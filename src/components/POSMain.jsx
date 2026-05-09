@@ -31,36 +31,38 @@ export default function POSMain() {
     setSyncProgress(0)
     setSyncError('')
     try {
-      // Wipe memory cache; disk cache is overwritten on success below
       cacheClear()
       setSyncProgress(10)
 
-      // Step 1: item groups
-      const groups = await getItemGroups()
-      store.setItemGroups(groups)
-      await cacheSetPersist('itemGroups', groups)
-      setSyncProgress(33)
-
-      // Step 2: always cache All items (needed for offline search/browsing)
-      const allData = await getItems({}, 100)
-      store.setItems(allData)
-      await cacheSetPersist('items:All:', allData)
-      // Also cache the selected group if different from All
-      if (store.selectedGroup !== 'All') {
-        const groupData = await getItems({ itemGroup: store.selectedGroup }, 100)
-        await cacheSetPersist(`items:${store.selectedGroup}:`, groupData)
-      }
-      setSyncProgress(66)
-
-      // Step 3: warehouse stock (ItemGrid re-fetches via syncVersion bump)
       const warehouse = store.posProfileData?.warehouse
-      if (warehouse) {
-        const map = await getWarehouseStock(warehouse)
-        await cacheSetPersist(`stock:${warehouse}`, map)
+
+      // Fetch item groups, all items, and warehouse stock in parallel
+      const [groups, allData, stockMap] = await Promise.all([
+        getItemGroups(),
+        fetchAllItems(),
+        warehouse ? getWarehouseStock(warehouse) : Promise.resolve({}),
+      ])
+      setSyncProgress(70)
+
+      store.setItemGroups(groups)
+      store.setItems(allData)
+
+      // Write all caches in parallel; also fetch the selected group if needed
+      const cacheOps = [
+        cacheSetPersist('itemGroups', groups),
+        cacheSetPersist('items:All:', allData),
+      ]
+      if (warehouse && stockMap) cacheOps.push(cacheSetPersist(`stock:${warehouse}`, stockMap))
+      if (store.selectedGroup !== 'All') {
+        cacheOps.push(
+          fetchAllItems(store.selectedGroup)
+            .then((gd) => cacheSetPersist(`items:${store.selectedGroup}:`, gd))
+            .catch(() => {})
+        )
       }
+      await Promise.all(cacheOps)
       setSyncProgress(100)
 
-      // Bump syncVersion — clears soldInSession and triggers ItemGrid stock reload
       store.incrementSyncVersion()
       store.setSyncStatus('done')
       setTimeout(() => store.setSyncStatus('idle'), 2000)
@@ -70,6 +72,21 @@ export default function POSMain() {
       store.setSyncStatus('error')
       setTimeout(() => store.setSyncStatus('idle'), 3000)
     }
+  }
+
+  // Fetches all items with pagination (500 per page)
+  async function fetchAllItems(group = null) {
+    const PAGE = 500
+    const filters = group ? { itemGroup: group } : {}
+    let all = []
+    let offset = 0
+    while (true) {
+      const batch = await getItems(filters, PAGE, offset)
+      all = all.concat(batch)
+      if (batch.length < PAGE) break
+      offset += PAGE
+    }
+    return all
   }
 
   // Poll offline queue count
