@@ -8,6 +8,39 @@
 
 ---
 
+## v1.2.0 — 2026-05-10
+
+### Overview
+
+Version 1.2.0 is a security update that introduces online license activation with per-machine binding, making it impossible to use a single license key on more than one computer. All v1.1.0 license keys are invalidated — only the new v1.2.0 keys will work with this version.
+
+---
+
+### New Features
+
+#### Online License Activation with Machine Binding
+
+The license system has been completely redesigned to prevent a single key from being shared across multiple installations.
+
+- **Per-machine binding** — when a license key is activated, the application records a hardware fingerprint of the machine (derived from hostname, CPU model, and network adapter MAC address). On every subsequent launch, the stored fingerprint is compared against the current machine. If they differ (i.e. the licence data was copied to another computer), the app immediately treats the licence as expired.
+- **Online activation server** — activation is now verified against a secure cloud server (Google Apps Script + Google Sheets). The server records which machine activated which key. If the same key is submitted from a different machine, the server rejects it.
+- **Re-activation on the same machine** — a key can be activated multiple times on the same machine (e.g. after a reinstall) without any problem.
+- **Offline fallback** — if the activation server is temporarily unreachable (network outage, Google service disruption), activation is still allowed locally so that legitimate users are not blocked. Machine binding still applies in offline mode.
+- **All v1.1.0 keys invalidated** — the internal key-signing secret has been changed. Any key distributed with v1.1.0 will be rejected by v1.2.0 automatically. New keys must be generated and distributed.
+
+---
+
+### Changes and Removals
+
+| Change | Detail |
+|---|---|
+| License key format | Unchanged (`XXXXX-XXXXX-XXXXX-XXXXX`) but the signing secret is new — all v1.1.0 keys are invalid |
+| New serial CSV files | `serials-pack-A.csv`, `serials-pack-B.csv`, `serials-pack-C.csv` (300,000 new keys total) |
+| Machine binding added | App stores and verifies machine fingerprint at every launch |
+| Online server check | Activation now calls the cloud server; rejected if key already used on a different machine |
+
+---
+
 ## v1.1.0 — 2026-05-09
 
 ### Overview

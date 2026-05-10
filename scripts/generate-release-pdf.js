@@ -204,7 +204,7 @@ const html = `<!DOCTYPE html>
   <div class="cover-title">ERPNext POS</div>
   <div class="cover-sub">Windows Desktop POS Application</div>
   <span class="cover-badge">Release Notes</span>
-  <span class="cover-badge">v1.1.0 · v1.0.0</span>
+  <span class="cover-badge">v1.2.0 · v1.1.0 · v1.0.0</span>
 </div>
 
 ${body}
