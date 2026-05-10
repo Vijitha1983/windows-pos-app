@@ -16,7 +16,7 @@ const fs     = require('fs')
 const path   = require('path')
 
 // Must match electron/license.js exactly
-const SECRET  = 'HSP-ERPNEXT-POS-LK-2025-X9K7'
+const SECRET  = 'ERPNEXT-POS-V2-LK-2026-X4R9M7'
 const CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 const PACK_FIRST_CHARS = {
