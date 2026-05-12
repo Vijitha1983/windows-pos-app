@@ -109,12 +109,16 @@ export default function ItemDialog() {
         discount:    0,
       }]
     }
-    return levels.map((l) => ({
-      label:       l.level,
-      uom:         item.stock_uom || 'Nos',
-      markedPrice: parseFloat(l.marked_price || 0),
-      discount:    parseFloat(l.discount_amount || 0),
-    }))
+    return levels.map((l) => {
+      const markedPrice = parseFloat(l.marked_price || 0)
+      const ourPrice    = parseFloat(l.our_price    || 0)
+      return {
+        label:       l.level,
+        uom:         item.stock_uom || 'Nos',
+        markedPrice: markedPrice || ourPrice,
+        discount:    markedPrice ? parseFloat(l.discount_amount || 0) : 0,
+      }
+    })
   }
 
   const [rows,            setRows]           = useState([])
