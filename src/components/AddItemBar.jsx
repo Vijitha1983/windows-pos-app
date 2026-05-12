@@ -52,10 +52,13 @@ export default function AddItemBar() {
     try {
       const key = `item:${item.item_code}`
       let full = cacheGet(key)
-      if (!full) { full = await getItem(item.item_code); cacheSet(key, full) }
+      if (!full || full.custom_price_selling_levels === undefined) {
+        full = await getItem(item.item_code)
+        cacheSet(key, full)
+      }
       const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, '')
       const levels = (full.custom_price_selling_levels || []).filter((l) => {
-        const isActive = l.active === 1 || l.active === true || l.active === '1'
+        const isActive = l.active == null || l.active === 1 || l.active === true || l.active === '1'
         if (!isActive) return false
         if (!l.bill_type) return true
         return norm(l.bill_type) === norm(billType)

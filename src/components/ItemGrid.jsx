@@ -230,18 +230,20 @@ export default function ItemGrid() {
       if (!full) {
         // Try disk cache (ignores TTL so stale data works offline)
         const disk = await cacheGetPersistStale(key)
-        if (disk) {
+        if (disk && disk.custom_price_selling_levels !== undefined) {
+          // Cache is fresh enough — has the selling levels field
           full = disk
           cacheSet(key, full)
         } else if (!navigator.onLine) {
           // Offline with no cached detail — build a workable item from grid data
-          full = {
+          full = disk || {
             ...item,
             has_serial_no: 0,
             has_batch_no: 0,
             stock_uom: item.stock_uom || item.uom || 'Nos',
             custom_price_selling_levels: [],
           }
+          cacheSet(key, full)
         } else {
           // Online: fetch full details and cache to disk for future offline use
           full = await getItem(item.item_code)
@@ -251,7 +253,7 @@ export default function ItemGrid() {
       }
       const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, '')
       const levels = (full.custom_price_selling_levels || []).filter((l) => {
-        const isActive = l.active === 1 || l.active === true || l.active === '1'
+        const isActive = l.active == null || l.active === 1 || l.active === true || l.active === '1'
         if (!isActive) return false
         if (!l.bill_type) return true
         return norm(l.bill_type) === norm(billType)
