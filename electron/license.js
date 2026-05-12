@@ -84,8 +84,8 @@ function checkLicense(store) {
     // Verify the activation was done on this machine
     const storedMachine  = store.get('licenseMachineId')
     const currentMachine = getMachineId()
-    if (storedMachine && storedMachine !== currentMachine) {
-      // Machine changed — treat as expired so cashier cannot use a copied install
+    // Require machine binding — no machineId means activation was incomplete
+    if (!storedMachine || storedMachine !== currentMachine) {
       return { status: 'expired', daysLeft: 0 }
     }
     return { status: 'active', daysLeft: 0, serial }
@@ -126,7 +126,16 @@ async function activateLicense(store, serial) {
     })
     const result = await httpsGet(`${SERVER_URL}?${params.toString()}`)
     if (!result.ok) {
-      return { ok: false, error: result.error || 'Activation rejected by server.' }
+      const msg = result.error || 'Activation rejected by server.'
+      // Generic server-side errors (script crash, quota, etc.) are transient —
+      // fall through to offline activation so users aren't permanently blocked
+      // by a GAS bug. Specific rejection messages (wrong machine, key not found)
+      // are treated as hard failures.
+      const isTransient = /internal server error|server error|try again/i.test(msg)
+      if (!isTransient) {
+        return { ok: false, error: msg }
+      }
+      console.warn('License server returned transient error, activating offline:', msg)
     }
   } catch (err) {
     // Server unreachable — allow activation offline so legitimate users
