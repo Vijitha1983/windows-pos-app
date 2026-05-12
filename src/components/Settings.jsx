@@ -15,8 +15,13 @@ export default function Settings({ onClose }) {
   const [loadingGiftAcc,   setLoadingGiftAcc]   = useState(false)
   const [savedGiftAccount, setSavedGiftAccount] = useState('')
 
+  const [licenseSerial, setLicenseSerial] = useState('')
+  const [licenseStatus, setLicenseStatus] = useState('')
+
   useEffect(() => {
     window.electronAPI.storeGet('giftAccount').then((v) => setSavedGiftAccount(v || ''))
+    window.electronAPI.storeGet('licenseSerial').then((v) => setLicenseSerial(v || ''))
+    window.electronAPI.licenseCheck().then((r) => setLicenseStatus(r?.status || ''))
   }, [])
 
 
@@ -270,6 +275,34 @@ export default function Settings({ onClose }) {
             </div>
           </section>
 
+          {/* License */}
+          <section>
+            <h3 className="text-gray-300 font-medium mb-2 text-sm uppercase tracking-wide">License</h3>
+            <div className="bg-gray-700/50 rounded-lg px-4 py-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400 text-sm">Status</span>
+                {licenseStatus === 'active' && (
+                  <span className="text-green-400 text-sm font-medium">Active</span>
+                )}
+                {licenseStatus === 'trial' && (
+                  <span className="text-amber-400 text-sm font-medium">Trial</span>
+                )}
+                {licenseStatus === 'expired' && (
+                  <span className="text-red-400 text-sm font-medium">Expired</span>
+                )}
+                {!licenseStatus && (
+                  <span className="text-gray-500 text-sm">—</span>
+                )}
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-gray-400 text-sm flex-shrink-0">Serial Key</span>
+                <span className="text-white text-sm font-mono truncate">
+                  {licenseSerial || <span className="text-gray-500">Not activated</span>}
+                </span>
+              </div>
+            </div>
+          </section>
+
           {/* Cache */}
           <section>
             <h3 className="text-gray-300 font-medium mb-2 text-sm uppercase tracking-wide">Cache</h3>
@@ -287,7 +320,7 @@ export default function Settings({ onClose }) {
           <div className="flex flex-col">
             {saved && <span className="text-green-400 text-sm">Saved ✓</span>}
             <span className="text-gray-600 text-xs select-none">
-              ERPNext POS v1.0.0 &nbsp;·&nbsp; &copy; 2025 Vijitha Rajapaksha. All rights reserved.
+              ERPNext POS v1.2.1 &nbsp;·&nbsp; &copy; 2025 Vijitha Rajapaksha. All rights reserved.
             </span>
           </div>
           <button
