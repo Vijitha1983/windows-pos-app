@@ -51,8 +51,8 @@ export default function AddItemBar() {
     setLoading(true)
     try {
       const key = `item:${item.item_code}`
-      let full = cacheGet(key)
-      if (!full || full.custom_price_selling_levels === undefined) {
+      let full = cacheGet(key)  // memory cache — valid for 5 min within session
+      if (!full) {
         full = await getItem(item.item_code)
         cacheSet(key, full)
       }

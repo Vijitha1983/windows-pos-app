@@ -226,16 +226,16 @@ export default function ItemGrid() {
     setLoadingItem(item.item_code)
     try {
       const key = `item:${item.item_code}`
-      let full = cacheGet(key)
+      let full = cacheGet(key)  // memory cache — valid for 5 min within session
       if (!full) {
-        // Try disk cache (ignores TTL so stale data works offline)
-        const disk = await cacheGetPersistStale(key)
-        if (disk && disk.custom_price_selling_levels !== undefined) {
-          // Cache is fresh enough — has the selling levels field
-          full = disk
+        if (navigator.onLine) {
+          // Always fetch fresh from network so selling levels / prices are current
+          full = await getItem(item.item_code)
           cacheSet(key, full)
-        } else if (!navigator.onLine) {
-          // Offline with no cached detail — build a workable item from grid data
+          cacheSetPersist(key, full)
+        } else {
+          // Offline: use last persisted version as fallback
+          const disk = await cacheGetPersistStale(key)
           full = disk || {
             ...item,
             has_serial_no: 0,
@@ -244,11 +244,6 @@ export default function ItemGrid() {
             custom_price_selling_levels: [],
           }
           cacheSet(key, full)
-        } else {
-          // Online: fetch full details and cache to disk for future offline use
-          full = await getItem(item.item_code)
-          cacheSet(key, full)
-          cacheSetPersist(key, full)
         }
       }
       const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, '')

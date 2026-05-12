@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
 import { getPOSProfiles, getPOSProfile, getGLAccounts } from '../services/api'
-import { cacheClear } from '../services/cache'
+import { cacheClearPersist } from '../services/cache'
 import { signOut } from '../services/auth'
 
 export default function Settings({ onClose }) {
@@ -62,8 +62,8 @@ export default function Settings({ onClose }) {
     }
   }
 
-  function handleClearCache() {
-    cacheClear()
+  async function handleClearCache() {
+    await cacheClearPersist()
     setSaved(true)
     setTimeout(() => setSaved(false), 1500)
   }
