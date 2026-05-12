@@ -115,7 +115,7 @@ async function activateLicense(store, serial) {
   const formatted = `${cleaned.slice(0,5)}-${cleaned.slice(5,10)}-${cleaned.slice(10,15)}-${cleaned.slice(15)}`
   const machineId = getMachineId()
 
-  // ── Online check against activation server ──
+  // ── Online check against activation server (internet required — no offline fallback) ──
   try {
     const params = new URLSearchParams({
       token:     SERVER_TOKEN,
@@ -126,21 +126,10 @@ async function activateLicense(store, serial) {
     })
     const result = await httpsGet(`${SERVER_URL}?${params.toString()}`)
     if (!result.ok) {
-      const msg = result.error || 'Activation rejected by server.'
-      // Generic server-side errors (script crash, quota, etc.) are transient —
-      // fall through to offline activation so users aren't permanently blocked
-      // by a GAS bug. Specific rejection messages (wrong machine, key not found)
-      // are treated as hard failures.
-      const isTransient = /internal server error|server error|try again/i.test(msg)
-      if (!isTransient) {
-        return { ok: false, error: msg }
-      }
-      console.warn('License server returned transient error, activating offline:', msg)
+      return { ok: false, error: result.error || 'Activation rejected by server.' }
     }
   } catch (err) {
-    // Server unreachable — allow activation offline so legitimate users
-    // are not blocked by a Google outage. Machine binding still applies.
-    console.warn('License server unreachable, activating offline:', err.message)
+    return { ok: false, error: 'Cannot reach activation server. An internet connection is required to activate. Please check your connection and try again.' }
   }
 
   // Store serial + machine fingerprint
