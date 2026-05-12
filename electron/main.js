@@ -193,7 +193,7 @@ app.on('window-all-closed', () => {
 
 // ─── IPC: License ─────────────────────────────────────────────────────────────
 ipcMain.handle('license-check',    ()         => checkLicense(store))
-ipcMain.handle('license-activate', (_, serial) => activateLicense(store, serial))
+ipcMain.handle('license-activate', (_, serial, email, phone, company) => activateLicense(store, serial, email, phone, company))
 
 // ─── IPC: electron-store ──────────────────────────────────────────────────────
 ipcMain.handle('store-get', (_, key) => store.get(key))

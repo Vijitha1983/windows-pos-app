@@ -106,7 +106,7 @@ function checkLicense(store) {
 
 // ── License activation ────────────────────────────────────────────────────────
 
-async function activateLicense(store, serial) {
+async function activateLicense(store, serial, email, phone, company) {
   if (!validateSerial(serial)) {
     return { ok: false, error: 'Invalid license key. Please check and try again.' }
   }
@@ -123,6 +123,9 @@ async function activateLicense(store, serial) {
       serial:    formatted,
       machineId: machineId,
       hostname:  os.hostname(),
+      email:     (email   || '').trim(),
+      phone:     (phone   || '').trim(),
+      company:   (company || '').trim(),
     })
     const result = await httpsGet(`${SERVER_URL}?${params.toString()}`)
     if (!result.ok) {
@@ -132,7 +135,7 @@ async function activateLicense(store, serial) {
     return { ok: false, error: 'Cannot reach activation server. An internet connection is required to activate. Please check your connection and try again.' }
   }
 
-  // Store serial + machine fingerprint
+  // Store serial + machine fingerprint only after server confirms
   store.set('licenseSerial',    formatted)
   store.set('licenseMachineId', machineId)
   return { ok: true }
