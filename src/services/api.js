@@ -615,25 +615,31 @@ export async function closePOSSession(posOpeningEntry, posProfile, company, user
   const openingModes = openingRes.data?.balance_details || []
   const reconMap = {}
   for (const b of openingModes) {
+    const openAmt = b.opening_amount || 0
     reconMap[b.mode_of_payment] = {
       mode_of_payment: b.mode_of_payment,
-      opening_amount:  b.opening_amount || 0,
+      opening_amount:  openAmt,
       expected_amount: 0,
-      closing_amount:  0,
+      // closing_amount starts at opening so ERPNext journals zero movement
+      // when there are no sales for this mode (closing - opening = 0)
+      closing_amount:  openAmt,
       difference:      0,
     }
   }
-  // Overlay actual collected amounts
+  // Overlay actual collected amounts.
+  // closing_amount = opening_amount + sales so ERPNext computes the correct
+  // GL movement: closing - opening = sales (not sales - opening).
   for (const [mode, amount] of Object.entries(byMode)) {
     if (reconMap[mode]) {
       reconMap[mode].expected_amount = amount
-      reconMap[mode].closing_amount  = amount
+      reconMap[mode].closing_amount  = reconMap[mode].opening_amount + amount
     } else {
+      const openAmt = mode.toLowerCase().includes('cash') ? openingCash : 0
       reconMap[mode] = {
         mode_of_payment: mode,
-        opening_amount:  mode.toLowerCase().includes('cash') ? openingCash : 0,
+        opening_amount:  openAmt,
         expected_amount: amount,
-        closing_amount:  amount,
+        closing_amount:  openAmt + amount,
         difference:      0,
       }
     }
