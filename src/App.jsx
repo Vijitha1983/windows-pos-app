@@ -8,6 +8,49 @@ import Login from './components/Login'
 import POSMain from './components/POSMain'
 import LicenseGate from './components/LicenseGate'
 
+function WindowControls() {
+  return (
+    <div
+      className="fixed top-0 left-0 right-0 h-8 z-[9999] flex items-center select-none"
+      style={{ WebkitAppRegion: 'drag' }}
+    >
+      <div className="ml-auto flex" style={{ WebkitAppRegion: 'no-drag' }}>
+        {/* Minimize */}
+        <button
+          onClick={() => window.electronAPI.minimize()}
+          title="Minimize"
+          className="w-11 h-8 flex items-center justify-center text-gray-500 hover:bg-white/10 hover:text-white transition-colors"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <line x1="1" y1="5" x2="9" y2="5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </button>
+        {/* Maximize / Restore Down */}
+        <button
+          onClick={() => window.electronAPI.maximize()}
+          title="Maximize / Restore Down"
+          className="w-11 h-8 flex items-center justify-center text-gray-500 hover:bg-white/10 hover:text-white transition-colors"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <rect x="0.75" y="0.75" width="8.5" height="8.5" fill="none" stroke="currentColor" strokeWidth="1.3" rx="0.3"/>
+          </svg>
+        </button>
+        {/* Close */}
+        <button
+          onClick={() => window.electronAPI.close()}
+          title="Close"
+          className="w-11 h-8 flex items-center justify-center text-gray-500 hover:bg-red-600 hover:text-white transition-colors"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const store = usePOSStore()
 
@@ -72,5 +115,10 @@ export default function App() {
   }, [store.isOnline, store.isLoggedIn])
 
   const screen = store.currentScreen === 'pos' ? <POSMain /> : <Login />
-  return <LicenseGate>{screen}</LicenseGate>
+  return (
+    <>
+      <WindowControls />
+      <LicenseGate>{screen}</LicenseGate>
+    </>
+  )
 }

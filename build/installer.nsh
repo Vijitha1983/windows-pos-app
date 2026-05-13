@@ -1,10 +1,19 @@
 ; ERPNext POS — Custom NSIS activation pages
-; Inserted via nsis.include in package.json.
-; Pages appear in the wizard before the installation progress bar.
+;
+; Uses the `customFinishPage` hook from electron-builder's assistedInstaller.nsh.
+; This macro is invoked in place of MUI_PAGE_FINISH, so our pages appear directly
+; after "Installation Complete" — the natural final step of the wizard.
+;
+; Everything (includes, variables, functions, Page declarations) lives here because
+; customFinishPage is called BEFORE customHeader in the generated script.
 
-!macro customHeader
+!macro customFinishPage
   !include "nsDialogs.nsh"
   !include "LogicLib.nsh"
+
+  !ifndef WM_SETTEXT
+    !define WM_SETTEXT 0x000C
+  !endif
 
   ; ── Variables ──────────────────────────────────────────────────────────────
   Var dlg
@@ -28,6 +37,8 @@
       Abort
     ${EndIf}
 
+    !insertmacro MUI_HEADER_TEXT "Activate ERPNext POS" "Choose how you would like to proceed."
+
     ${NSD_CreateLabel} 0 0 100% 30u "How would you like to use ERPNext POS?"
     Pop $0
 
@@ -38,24 +49,29 @@
     ${NSD_CreateRadioButton} 0 58u 100% 14u "  Start the 30-day free trial  (you can activate any time)"
     Pop $RadioTrial
 
+    ; Rename "Next >" to "Finish" — this is the last wizard step
+    GetDlgItem $0 $HWNDPARENT 1
+    SendMessage $0 ${WM_SETTEXT} 0 "STR:Finish"
+
     nsDialogs::Show
   FunctionEnd
 
   Function ActivationChoicePageLeave
     ${NSD_GetState} $RadioActivate $ActivateChosen
     ${If} $ActivateChosen == ${BST_UNCHECKED}
-      ; Trial — write flag immediately so we don't need the form page
+      ; Trial — write flag and launch app
       CreateDirectory "$APPDATA\ERPNext POS"
       FileOpen $0 "$APPDATA\ERPNext POS\pending-activation.txt" w
       FileWrite $0 "trial"
       FileClose $0
+      Exec `"$INSTDIR\ERPNext POS.exe"`
     ${EndIf}
   FunctionEnd
 
   ; ── Page 2: Activation details (skipped when trial chosen) ─────────────────
   Function ActivationFormPage
     ${If} $ActivateChosen == ${BST_UNCHECKED}
-      Abort   ; skip this page — trial was selected
+      Abort   ; skip — trial selected, installer is finishing
     ${EndIf}
 
     nsDialogs::Create 1018
@@ -63,6 +79,8 @@
     ${If} $dlg == error
       Abort
     ${EndIf}
+
+    !insertmacro MUI_HEADER_TEXT "Activation Details" "Enter your license information to activate ERPNext POS."
 
     ${NSD_CreateLabel} 0 0 100% 10u "License Key *"
     Pop $0
@@ -83,6 +101,10 @@
     Pop $0
     ${NSD_CreateText} 0 102u 100% 13u ""
     Pop $TxtCompany
+
+    ; Rename "Next >" to "Finish"
+    GetDlgItem $0 $HWNDPARENT 1
+    SendMessage $0 ${WM_SETTEXT} 0 "STR:Finish"
 
     nsDialogs::Show
   FunctionEnd
@@ -114,9 +136,10 @@
     FileWrite $0 "$PendingPhone$\r$\n"
     FileWrite $0 "$PendingCompany$\r$\n"
     FileClose $0
+    Exec `"$INSTDIR\ERPNext POS.exe"`
   FunctionEnd
 
-  ; ── Page declarations (order relative to MUI pages is set by electron-builder)
+  ; ── Page declarations ────────────────────────────────────────────────────────
   Page custom ActivationChoicePage ActivationChoicePageLeave
   Page custom ActivationFormPage   ActivationFormPageLeave
 !macroend
