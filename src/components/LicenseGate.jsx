@@ -187,40 +187,60 @@ function CountryCodePicker({ value, onChange }) {
 }
 
 export default function LicenseGate({ children }) {
-  const [status,      setStatus]      = useState(null)
-  const [daysLeft,    setDaysLeft]    = useState(0)
-  const [showForm,    setShowForm]    = useState(false)
-  const [serial,      setSerial]      = useState('')
-  const [email,       setEmail]       = useState('')
-  const [dialCode,    setDialCode]    = useState('+94')   // default Sri Lanka
-  const [phone,       setPhone]       = useState('')
-  const [company,     setCompany]     = useState('')
-  const [error,       setError]       = useState('')
-  const [loading,     setLoading]     = useState(false)
-  const [success,     setSuccess]     = useState(false)
-  const [dismissed,   setDismissed]   = useState(false)
+  const [status,           setStatus]           = useState(null)
+  const [daysLeft,         setDaysLeft]         = useState(0)
+  const [showForm,         setShowForm]         = useState(false)
+  const [serial,           setSerial]           = useState('')
+  const [email,            setEmail]            = useState('')
+  const [dialCode,         setDialCode]         = useState('+94')
+  const [phone,            setPhone]            = useState('')
+  const [company,          setCompany]          = useState('')
+  const [error,            setError]            = useState('')
+  const [loading,          setLoading]          = useState(false)
+  const [success,          setSuccess]          = useState(false)
+  const [dismissed,        setDismissed]        = useState(false)
+  const [autoActivating,   setAutoActivating]   = useState(false)
+  const [fromInstaller,    setFromInstaller]    = useState(false)
 
   useEffect(() => { loadStatus() }, [])
 
   async function loadStatus() {
-    // Check if the installer left pending activation data
     const pending = await window.electronAPI.licenseGetPending()
     if (pending?.type === 'activate') {
+      // Parse the combined phone (e.g. "+94771234567") back into dial + number
+      const rawPhone = (pending.phone || '').trim()
+      let parsedDial = '+94'
+      let parsedNumber = rawPhone
+      const sorted = [...COUNTRIES].sort((a, b) => b.dial.length - a.dial.length)
+      for (const c of sorted) {
+        if (rawPhone.startsWith(c.dial)) {
+          parsedDial  = c.dial
+          parsedNumber = rawPhone.slice(c.dial.length).trimStart()
+          break
+        }
+      }
+
       setSerial(pending.serial || '')
       setEmail(pending.email   || '')
-      setPhone(pending.phone   || '')
+      setDialCode(parsedDial)
+      setPhone(parsedNumber)
       setCompany(pending.company || '')
-      // Attempt auto-activation with installer-supplied details
+
+      // Auto-activate silently — show loading screen, not the setup form
+      setAutoActivating(true)
       const result = await window.electronAPI.licenseActivate(
         pending.serial, pending.email, pending.phone, pending.company
       )
+      setAutoActivating(false)
+
       if (result.ok) {
         setStatus('active')
         return
       }
-      // Failed — fall through to show the form pre-filled with the error
-      setError(result.error)
-      setShowForm(true)
+      // Activation failed — show the form pre-filled so user can correct and retry
+      // but skip the full "welcome / choose" screen since serial came from the installer
+      setError(result.error || 'Activation failed. Please check your details and try again.')
+      setFromInstaller(true)
       setStatus('setup')
       return
     }
@@ -254,6 +274,7 @@ export default function LicenseGate({ children }) {
         setShowForm(false)
         setSuccess(false)
         setDismissed(false)
+        setFromInstaller(false)
         setSetupTab('activate')
       }, 1500)
     } else {
@@ -277,8 +298,102 @@ export default function LicenseGate({ children }) {
     setTrialLoading(false)
   }
 
+  // ── Auto-activating from installer data (silent loading screen) ─────────────
+  if (autoActivating) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-white font-medium text-lg">Activating your license…</p>
+          <p className="text-gray-400 text-sm">Verifying with the activation server</p>
+        </div>
+      </div>
+    )
+  }
+
   if (status === null) return null
   if (status === 'active') return children
+
+  // ── Installer activation failed — show pre-filled form, no welcome screen ───
+  if (status === 'setup' && fromInstaller) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-6">
+        <div className="w-full max-w-md space-y-6">
+          <div className="text-center">
+            <div className="inline-flex items-center justify-center w-14 h-14 bg-red-900/40 border border-red-700 rounded-2xl mb-4">
+              <svg className="w-7 h-7 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+            </div>
+            <h1 className="text-white text-xl font-bold">Activation Failed</h1>
+            <p className="text-red-400 text-sm mt-1 px-4">{error}</p>
+          </div>
+
+          <div className="bg-gray-800 border border-gray-700 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div>
+              <label className="block text-gray-300 text-xs font-medium mb-1">License Key <span className="text-red-400">*</span></label>
+              <input type="text" value={serial}
+                onChange={(e) => { setSerial(e.target.value.toUpperCase()); setError('') }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleActivate() }}
+                placeholder="XXXXX-XXXXX-XXXXX-XXXXX" maxLength={24} autoFocus
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white font-mono text-sm tracking-widest focus:outline-none focus:border-blue-500 placeholder-gray-500"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-300 text-xs font-medium mb-1">Email Address <span className="text-red-400">*</span></label>
+              <input type="email" value={email}
+                onChange={(e) => { setEmail(e.target.value); setError('') }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleActivate() }}
+                placeholder="you@example.com"
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder-gray-500"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-300 text-xs font-medium mb-1">Phone Number <span className="text-red-400">*</span></label>
+              <div className="flex">
+                <CountryCodePicker value={dialCode} onChange={setDialCode} />
+                <input type="tel" value={phone}
+                  onChange={(e) => { setPhone(e.target.value); setError('') }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleActivate() }}
+                  placeholder="77 123 4567"
+                  className="flex-1 bg-gray-700 border border-gray-600 border-l-0 rounded-r-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder-gray-500"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-gray-300 text-xs font-medium mb-1">Company / Business Name <span className="text-gray-500 font-normal">(optional)</span></label>
+              <input type="text" value={company}
+                onChange={(e) => { setCompany(e.target.value); setError('') }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleActivate() }}
+                placeholder="ABC Trading (Pvt) Ltd"
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder-gray-500"
+              />
+            </div>
+
+            {error   && <p className="text-red-400 text-xs">{error}</p>}
+            {success && <p className="text-green-400 text-xs font-medium">License activated! Starting…</p>}
+
+            <button onClick={handleActivate}
+              disabled={loading || !serial.trim() || !email.trim() || !phone.trim()}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg transition-colors text-sm"
+            >
+              {loading ? 'Verifying…' : 'Retry Activation'}
+            </button>
+
+            <div className="text-center">
+              <button onClick={async () => { setFromInstaller(false); await window.electronAPI.licenseStartTrial(); loadStatus() }}
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors underline"
+              >
+                Skip for now — start the 30-day free trial
+              </button>
+            </div>
+          </div>
+
+          <p className="text-center text-gray-600 text-xs">ERPNext POS · © {new Date().getFullYear()} Vijitha Rajapaksha</p>
+        </div>
+      </div>
+    )
+  }
 
   if (status === 'setup') {
     return (
