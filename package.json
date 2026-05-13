@@ -74,7 +74,7 @@
       "installerIcon": "public/icon.ico",
       "uninstallerIcon": "public/icon.ico",
       "deleteAppDataOnUninstall": true,
-      "runAfterFinish": false,
+      "runAfterFinish": true,
       "license": null
     }
   }
