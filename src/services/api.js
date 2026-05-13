@@ -627,19 +627,22 @@ export async function closePOSSession(posOpeningEntry, posProfile, company, user
     }
   }
   // Overlay actual collected amounts.
-  // closing_amount = opening_amount + sales so ERPNext computes the correct
-  // GL movement: closing - opening = sales (not sales - opening).
+  // expected_amount = opening + sales (total expected in drawer).
+  // closing_amount  = opening + sales (cashier confirms full drawer amount).
+  // ERPNext MODE OF PAYMENTS display = expected - opening = sales. ✓
   for (const [mode, amount] of Object.entries(byMode)) {
     if (reconMap[mode]) {
-      reconMap[mode].expected_amount = amount
-      reconMap[mode].closing_amount  = reconMap[mode].opening_amount + amount
+      const total = reconMap[mode].opening_amount + amount
+      reconMap[mode].expected_amount = total
+      reconMap[mode].closing_amount  = total
     } else {
       const openAmt = mode.toLowerCase().includes('cash') ? openingCash : 0
+      const total   = openAmt + amount
       reconMap[mode] = {
         mode_of_payment: mode,
         opening_amount:  openAmt,
-        expected_amount: amount,
-        closing_amount:  openAmt + amount,
+        expected_amount: total,
+        closing_amount:  total,
         difference:      0,
       }
     }
