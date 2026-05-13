@@ -164,15 +164,106 @@
     ; Combine country code + number into one phone string
     StrCpy $PendingPhone "$PendingPhoneCC$PendingPhone"
 
-    CreateDirectory "$APPDATA\ERPNext POS"
-    FileOpen $0 "$APPDATA\ERPNext POS\pending-activation.txt" w
-    FileWrite $0 "activate$\r$\n"
-    FileWrite $0 "$PendingSerial$\r$\n"
-    FileWrite $0 "$PendingEmail$\r$\n"
-    FileWrite $0 "$PendingPhone$\r$\n"
-    FileWrite $0 "$PendingCompany$\r$\n"
+    ; Write each field to its own temp file so PowerShell can read them without
+    ; any command-line quoting or injection concerns
+    FileOpen $0 "$TEMP\pos_serial.txt"  w
+    FileWrite $0 "$PendingSerial"
     FileClose $0
-    Exec `"$INSTDIR\ERPNext POS.exe"`
+    FileOpen $0 "$TEMP\pos_email.txt"   w
+    FileWrite $0 "$PendingEmail"
+    FileClose $0
+    FileOpen $0 "$TEMP\pos_phone.txt"   w
+    FileWrite $0 "$PendingPhone"
+    FileClose $0
+    FileOpen $0 "$TEMP\pos_company.txt" w
+    FileWrite $0 "$PendingCompany"
+    FileClose $0
+
+    ; Write the PowerShell preregister script
+    ; $TEMP expands here to the runtime temp path; $$ produces a literal $ in the file
+    FileOpen $0 "$TEMP\pos_prereq.ps1" w
+    FileWrite $0 "$$s = (Get-Content '$TEMP\pos_serial.txt'  -Raw -Encoding UTF8).Trim()$\r$\n"
+    FileWrite $0 "$$e = (Get-Content '$TEMP\pos_email.txt'   -Raw -Encoding UTF8).Trim()$\r$\n"
+    FileWrite $0 "$$p = (Get-Content '$TEMP\pos_phone.txt'   -Raw -Encoding UTF8).Trim()$\r$\n"
+    FileWrite $0 "$$c = (Get-Content '$TEMP\pos_company.txt' -Raw -Encoding UTF8).Trim()$\r$\n"
+    FileWrite $0 "$$base = 'https://script.google.com/macros/s/AKfycbycoXS_-l5NduU482jerByzseOq0RgNq8REDXknMTvzpk1dJYl9HlwnjD15mIZQSQH63A/exec'$\r$\n"
+    FileWrite $0 "$$q  = 'token=ERPNEXT-POS-ACTIVATE-2025&action=preregister'$\r$\n"
+    FileWrite $0 "$$q += '&serial='  + [uri]::EscapeDataString($$s)$\r$\n"
+    FileWrite $0 "$$q += '&email='   + [uri]::EscapeDataString($$e)$\r$\n"
+    FileWrite $0 "$$q += '&phone='   + [uri]::EscapeDataString($$p)$\r$\n"
+    FileWrite $0 "$$q += '&company=' + [uri]::EscapeDataString($$c)$\r$\n"
+    FileWrite $0 "try {$\r$\n"
+    FileWrite $0 "  $$r = Invoke-RestMethod -Uri ($$base + '?' + $$q) -Method Get -TimeoutSec 30$\r$\n"
+    FileWrite $0 "  if ($$r.ok -eq $$true) {$\r$\n"
+    FileWrite $0 "    Set-Content '$TEMP\pos_prereq_result.txt' 'ok' -Encoding ASCII -NoNewline$\r$\n"
+    FileWrite $0 "  } else {$\r$\n"
+    FileWrite $0 "    Set-Content '$TEMP\pos_prereq_result.txt' ('ERR:' + $$r.error) -Encoding ASCII -NoNewline$\r$\n"
+    FileWrite $0 "  }$\r$\n"
+    FileWrite $0 "} catch {$\r$\n"
+    FileWrite $0 "  Set-Content '$TEMP\pos_prereq_result.txt' 'NETERR' -Encoding ASCII -NoNewline$\r$\n"
+    FileWrite $0 "}$\r$\n"
+    FileClose $0
+
+    ; Show progress banner while the license server is contacted
+    Banner::show /NOUNLOAD "Registering your license, please wait..."
+
+    ; nsExec::Exec processes the message queue during execution so the banner stays visible
+    nsExec::Exec 'powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -File "$TEMP\pos_prereq.ps1"'
+    Pop $0  ; exit code (ignored — result is in the result file)
+
+    Banner::destroy
+
+    ; Read result written by the PowerShell script
+    ClearErrors
+    FileOpen $0 "$TEMP\pos_prereq_result.txt" r
+    ${If} ${Errors}
+      StrCpy $1 "NETERR"
+    ${Else}
+      FileRead $0 $1
+      FileClose $0
+    ${EndIf}
+
+    ; Clean up temp files regardless of outcome
+    Delete "$TEMP\pos_serial.txt"
+    Delete "$TEMP\pos_email.txt"
+    Delete "$TEMP\pos_phone.txt"
+    Delete "$TEMP\pos_company.txt"
+    Delete "$TEMP\pos_prereq.ps1"
+    Delete "$TEMP\pos_prereq_result.txt"
+
+    ${If} $1 == "ok"
+      ; Server confirmed serial is valid — write pending-activation.txt and launch app
+      CreateDirectory "$APPDATA\ERPNext POS"
+      FileOpen $0 "$APPDATA\ERPNext POS\pending-activation.txt" w
+      FileWrite $0 "activate$\r$\n"
+      FileWrite $0 "$PendingSerial$\r$\n"
+      FileWrite $0 "$PendingEmail$\r$\n"
+      FileWrite $0 "$PendingPhone$\r$\n"
+      FileWrite $0 "$PendingCompany$\r$\n"
+      FileClose $0
+      Exec `"$INSTDIR\ERPNext POS.exe"`
+    ${ElseIf} $1 == "NETERR"
+      ; No internet connection — save details and let the app activate on next online start
+      MessageBox MB_OK|MB_ICONINFORMATION "Could not reach the activation server.$\r$\n$\r$\nYour license details have been saved. ERPNext POS will activate automatically the next time you open it with an internet connection."
+      CreateDirectory "$APPDATA\ERPNext POS"
+      FileOpen $0 "$APPDATA\ERPNext POS\pending-activation.txt" w
+      FileWrite $0 "activate$\r$\n"
+      FileWrite $0 "$PendingSerial$\r$\n"
+      FileWrite $0 "$PendingEmail$\r$\n"
+      FileWrite $0 "$PendingPhone$\r$\n"
+      FileWrite $0 "$PendingCompany$\r$\n"
+      FileClose $0
+      Exec `"$INSTDIR\ERPNext POS.exe"`
+    ${Else}
+      ; Server returned a validation error (bad serial, revoked, etc.)
+      ; Strip the "ERR:" prefix then show the message so the user can correct and retry
+      StrCpy $2 $1 4
+      ${If} $2 == "ERR:"
+        StrCpy $1 $1 1000 4
+      ${EndIf}
+      MessageBox MB_OK|MB_ICONEXCLAMATION "Activation failed:$\r$\n$\r$\n$1$\r$\n$\r$\nPlease check your license key and try again."
+      Abort
+    ${EndIf}
   FunctionEnd
 
   ; ── Page declarations ────────────────────────────────────────────────────────
