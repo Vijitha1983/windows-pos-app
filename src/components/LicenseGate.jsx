@@ -203,6 +203,28 @@ export default function LicenseGate({ children }) {
   useEffect(() => { loadStatus() }, [])
 
   async function loadStatus() {
+    // Check if the installer left pending activation data
+    const pending = await window.electronAPI.licenseGetPending()
+    if (pending?.type === 'activate') {
+      setSerial(pending.serial || '')
+      setEmail(pending.email   || '')
+      setPhone(pending.phone   || '')
+      setCompany(pending.company || '')
+      // Attempt auto-activation with installer-supplied details
+      const result = await window.electronAPI.licenseActivate(
+        pending.serial, pending.email, pending.phone, pending.company
+      )
+      if (result.ok) {
+        setStatus('active')
+        return
+      }
+      // Failed — fall through to show the form pre-filled with the error
+      setError(result.error)
+      setShowForm(true)
+      setStatus('setup')
+      return
+    }
+
     const result = await window.electronAPI.licenseCheck()
     setStatus(result.status)
     setDaysLeft(result.daysLeft || 0)

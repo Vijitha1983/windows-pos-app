@@ -180,7 +180,29 @@ function createWindow() {
   return win
 }
 
-app.whenReady().then(() => {
+// ── Read pending activation written by the NSIS installer ─────────────────────
+// The installer custom page writes pending-activation.txt to userData before
+// launching the app. We process it here (trial → apply immediately; activate →
+// store data for the renderer to pick up and submit with the real machine ID).
+let pendingActivation = null  // { type:'trial' } | { type:'activate', serial, email, phone, company }
+
+async function processPendingActivation() {
+  const filePath = path.join(app.getPath('userData'), 'pending-activation.txt')
+  if (!fs.existsSync(filePath)) return
+  try {
+    const raw  = fs.readFileSync(filePath, 'utf8').trim()
+    fs.unlinkSync(filePath)
+    if (raw === 'trial') {
+      startTrial(store)
+    } else {
+      const [, serial = '', email = '', phone = '', company = ''] = raw.split(/\r?\n/)
+      pendingActivation = { type: 'activate', serial: serial.trim(), email: email.trim(), phone: phone.trim(), company: company.trim() }
+    }
+  } catch { /* ignore — file may be malformed */ }
+}
+
+app.whenReady().then(async () => {
+  await processPendingActivation()
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -192,9 +214,10 @@ app.on('window-all-closed', () => {
 })
 
 // ─── IPC: License ─────────────────────────────────────────────────────────────
-ipcMain.handle('license-check',       ()         => checkLicense(store))
-ipcMain.handle('license-activate',    (_, serial, email, phone, company) => activateLicense(store, serial, email, phone, company))
-ipcMain.handle('license-start-trial', ()         => startTrial(store))
+ipcMain.handle('license-check',            ()         => checkLicense(store))
+ipcMain.handle('license-activate',         (_, serial, email, phone, company) => activateLicense(store, serial, email, phone, company))
+ipcMain.handle('license-start-trial',      ()         => startTrial(store))
+ipcMain.handle('license-get-pending',      ()         => { const p = pendingActivation; pendingActivation = null; return p })
 
 // ─── IPC: electron-store ──────────────────────────────────────────────────────
 ipcMain.handle('store-get', (_, key) => store.get(key))

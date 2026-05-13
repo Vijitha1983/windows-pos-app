@@ -21,7 +21,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // License
   licenseCheck:      ()       => ipcRenderer.invoke('license-check'),
   licenseActivate:   (serial, email, phone, company) => ipcRenderer.invoke('license-activate', serial, email, phone, company),
-  licenseStartTrial: ()       => ipcRenderer.invoke('license-start-trial'),
+  licenseStartTrial:  ()      => ipcRenderer.invoke('license-start-trial'),
+  licenseGetPending:  ()      => ipcRenderer.invoke('license-get-pending'),
 
   // Window controls
   minimize: () => ipcRenderer.send('window-minimize'),
