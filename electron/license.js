@@ -7,6 +7,7 @@ const TRIAL_DAYS   = 30
 const CHARSET      = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 const SERVER_URL   = 'https://script.google.com/macros/s/AKfycbycoXS_-l5NduU482jerByzseOq0RgNq8REDXknMTvzpk1dJYl9HlwnjD15mIZQSQH63A/exec'
 const SERVER_TOKEN = 'ERPNEXT-POS-ACTIVATE-2025'
+const VERIFY_INTERVAL_MS = 8 * 60 * 60 * 1000  // re-verify against server every 8 hours
 
 // ── Serial validation ─────────────────────────────────────────────────────────
 
@@ -24,8 +25,6 @@ function validateSerial(raw) {
 }
 
 // ── Machine fingerprint ───────────────────────────────────────────────────────
-// Combines stable hardware identifiers into a single 32-char hash.
-// The same physical machine always produces the same ID.
 
 function getMachineId() {
   try {
@@ -48,7 +47,6 @@ function getMachineId() {
 }
 
 // ── HTTPS GET with redirect following ────────────────────────────────────────
-// Google Apps Script redirects once (302) before returning the response.
 
 function httpsGet(url, maxRedirects = 6) {
   return new Promise((resolve, reject) => {
@@ -76,32 +74,66 @@ function httpsGet(url, maxRedirects = 6) {
   })
 }
 
-// ── License check ─────────────────────────────────────────────────────────────
+// ── Trial helper ──────────────────────────────────────────────────────────────
 
-function checkLicense(store) {
-  const serial = store.get('licenseSerial')
-  if (serial && validateSerial(serial)) {
-    // Verify the activation was done on this machine
-    const storedMachine  = store.get('licenseMachineId')
-    const currentMachine = getMachineId()
-    // Require machine binding — no machineId means activation was incomplete
-    if (!storedMachine || storedMachine !== currentMachine) {
-      return { status: 'expired', daysLeft: 0 }
-    }
-    return { status: 'active', daysLeft: 0, serial }
-  }
-
+function trialStatus(store) {
   let trialStart = store.get('trialStart')
   if (!trialStart) {
     trialStart = Date.now()
     store.set('trialStart', trialStart)
   }
-
   const daysUsed = Math.floor((Date.now() - Number(trialStart)) / 86400000)
   const daysLeft = Math.max(0, TRIAL_DAYS - daysUsed)
   return daysLeft > 0
     ? { status: 'trial', daysLeft }
     : { status: 'expired', daysLeft: 0 }
+}
+
+// ── License check ─────────────────────────────────────────────────────────────
+// Async: performs a periodic server-side verify so a serial activated on the
+// wrong machine (e.g. via old offline fallback) gets revoked automatically.
+
+async function checkLicense(store) {
+  const serial = store.get('licenseSerial')
+  if (serial && validateSerial(serial)) {
+    const storedMachine  = store.get('licenseMachineId')
+    const currentMachine = getMachineId()
+
+    // Require machine binding — missing or mismatched means copied/invalid install
+    if (!storedMachine || storedMachine !== currentMachine) {
+      return { status: 'expired', daysLeft: 0 }
+    }
+
+    // Periodic server re-verification: catches serials activated offline on the
+    // wrong machine (server has a different machineId recorded for this serial).
+    const lastVerified = Number(store.get('licenseLastVerified') || 0)
+    if (Date.now() - lastVerified > VERIFY_INTERVAL_MS) {
+      try {
+        const params = new URLSearchParams({
+          token:     SERVER_TOKEN,
+          action:    'verify',
+          serial:    serial,
+          machineId: storedMachine,
+        })
+        const result = await httpsGet(`${SERVER_URL}?${params.toString()}`)
+        if (result.ok) {
+          store.set('licenseLastVerified', Date.now())
+        } else {
+          // Server rejected this machine — revoke the local license
+          store.delete('licenseSerial')
+          store.delete('licenseMachineId')
+          store.delete('licenseLastVerified')
+          return trialStatus(store)
+        }
+      } catch {
+        // Offline or server error — trust local until next online check
+      }
+    }
+
+    return { status: 'active', daysLeft: 0, serial }
+  }
+
+  return trialStatus(store)
 }
 
 // ── License activation ────────────────────────────────────────────────────────
@@ -115,7 +147,6 @@ async function activateLicense(store, serial, email, phone, company) {
   const formatted = `${cleaned.slice(0,5)}-${cleaned.slice(5,10)}-${cleaned.slice(10,15)}-${cleaned.slice(15)}`
   const machineId = getMachineId()
 
-  // ── Online check against activation server (internet required — no offline fallback) ──
   try {
     const params = new URLSearchParams({
       token:     SERVER_TOKEN,
@@ -135,9 +166,9 @@ async function activateLicense(store, serial, email, phone, company) {
     return { ok: false, error: 'Cannot reach activation server. An internet connection is required to activate. Please check your connection and try again.' }
   }
 
-  // Store serial + machine fingerprint only after server confirms
-  store.set('licenseSerial',    formatted)
-  store.set('licenseMachineId', machineId)
+  store.set('licenseSerial',      formatted)
+  store.set('licenseMachineId',   machineId)
+  store.set('licenseLastVerified', Date.now())
   return { ok: true }
 }
 
