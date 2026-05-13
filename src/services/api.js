@@ -357,6 +357,25 @@ export async function getItem(itemCode) {
   return data.data
 }
 
+// Returns the selling rate for an item from a specific price list, or null if not found.
+export async function getItemPriceListRate(itemCode, priceList) {
+  if (!itemCode || !priceList) return null
+  try {
+    const data = await request('GET', '/api/resource/Item Price' + qs({
+      filters: JSON.stringify([
+        ['item_code',  '=', itemCode],
+        ['price_list', '=', priceList],
+        ['selling',    '=', 1],
+      ]),
+      fields:            JSON.stringify(['price_list_rate']),
+      limit_page_length: 1,
+    }))
+    return data.data?.[0]?.price_list_rate ?? null
+  } catch {
+    return null
+  }
+}
+
 // ─── Customers ───────────────────────────────────────────────────────────────
 
 export async function getCustomers(search = '') {

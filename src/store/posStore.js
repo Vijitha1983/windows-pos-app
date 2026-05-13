@@ -88,7 +88,7 @@ export const usePOSStore = create((set, get) => ({
 
   // Bill operations
   addItemToBill: (item, priceLevel, qty = 1, serialNo = '', batchNo = '') => {
-    const price = priceLevel ? priceLevel.our_price : item.standard_rate || 0
+    const price = priceLevel ? priceLevel.our_price : (item.price_list_rate ?? item.standard_rate ?? 0)
     const levelName = priceLevel ? priceLevel.level : 'Standard'
     set((state) => {
       // Items with serial numbers are always separate rows (each unit is unique)

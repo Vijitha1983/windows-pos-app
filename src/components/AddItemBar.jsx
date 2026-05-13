@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { getItem, searchItems } from '../services/api'
+import { getItem, searchItems, getItemPriceListRate } from '../services/api'
 import { cacheGet, cacheSet } from '../services/cache'
 
 export default function AddItemBar() {
-  const { openItemDialog, itemDialog, billType } = usePOSStore()
+  const { openItemDialog, itemDialog, billType, posProfileData } = usePOSStore()
   const [query,   setQuery]   = useState('')
   const [results, setResults] = useState([])
   const [idx,     setIdx]     = useState(0)
@@ -63,6 +63,10 @@ export default function AddItemBar() {
         if (!l.bill_type) return true
         return norm(l.bill_type) === norm(billType)
       })
+      if (levels.length === 0 && posProfileData?.selling_price_list) {
+        const rate = await getItemPriceListRate(full.item_code, posProfileData.selling_price_list)
+        if (rate !== null) full = { ...full, price_list_rate: rate }
+      }
       openItemDialog(full, levels)
     } catch {}
     setLoading(false)

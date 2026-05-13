@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { getItem, getItems, searchItems, getWarehouseStock, getBaseURL } from '../services/api'
+import { getItem, getItems, searchItems, getWarehouseStock, getBaseURL, getItemPriceListRate } from '../services/api'
 import { cacheGet, cacheSet, cacheGetPersist, cacheSetPersist, cacheGetPersistStale } from '../services/cache'
 
 export default function ItemGrid() {
@@ -253,6 +253,10 @@ export default function ItemGrid() {
         if (!l.bill_type) return true
         return norm(l.bill_type) === norm(billType)
       })
+      if (levels.length === 0 && posProfileData?.selling_price_list) {
+        const rate = await getItemPriceListRate(full.item_code, posProfileData.selling_price_list)
+        if (rate !== null) full = { ...full, price_list_rate: rate }
+      }
       openItemDialog(full, levels)
     } catch (err) {
       showError('Could not load item: ' + (err.message || 'Network error'))

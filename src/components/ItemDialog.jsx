@@ -105,7 +105,7 @@ export default function ItemDialog() {
       return [{
         label:       'Standard',
         uom:         item.stock_uom || 'Nos',
-        markedPrice: parseFloat(item.standard_rate || 0),
+        markedPrice: parseFloat(item.price_list_rate ?? item.standard_rate ?? 0),
         discount:    0,
       }]
     }

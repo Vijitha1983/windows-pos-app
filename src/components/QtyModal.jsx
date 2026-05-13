@@ -11,7 +11,7 @@ export default function QtyModal() {
   const level     = qtyModal?.priceLevel
   const unitPrice = level
     ? parseFloat(level.our_price   || 0)
-    : parseFloat(item?.standard_rate || 0)
+    : parseFloat(item?.price_list_rate ?? item?.standard_rate ?? 0)
 
   const qtyNum = Math.max(0, parseFloat(qty) || 0)
   const amount = qtyNum * unitPrice
