@@ -74,19 +74,21 @@ function httpsGet(url, maxRedirects = 6) {
   })
 }
 
-// ── Trial helper ──────────────────────────────────────────────────────────────
+// ── Trial helpers ─────────────────────────────────────────────────────────────
 
 function trialStatus(store) {
-  let trialStart = store.get('trialStart')
-  if (!trialStart) {
-    trialStart = Date.now()
-    store.set('trialStart', trialStart)
-  }
+  const trialStart = store.get('trialStart')
+  if (!trialStart) return { status: 'setup' }   // fresh install — let user choose
   const daysUsed = Math.floor((Date.now() - Number(trialStart)) / 86400000)
   const daysLeft = Math.max(0, TRIAL_DAYS - daysUsed)
   return daysLeft > 0
     ? { status: 'trial', daysLeft }
     : { status: 'expired', daysLeft: 0 }
+}
+
+function startTrial(store) {
+  if (!store.get('trialStart')) store.set('trialStart', Date.now())
+  return trialStatus(store)
 }
 
 // ── License check ─────────────────────────────────────────────────────────────
@@ -172,4 +174,4 @@ async function activateLicense(store, serial, email, phone, company) {
   return { ok: true }
 }
 
-module.exports = { checkLicense, activateLicense, validateSerial, computeChecksum, CHARSET }
+module.exports = { checkLicense, activateLicense, startTrial, validateSerial, computeChecksum, CHARSET }

@@ -4,7 +4,7 @@ const https = require('https')
 const http = require('http')
 const fs   = require('fs')
 const Store = require('electron-store')
-const { checkLicense, activateLicense } = require('./license')
+const { checkLicense, activateLicense, startTrial } = require('./license')
 
 let mainWin = null   // reference used by cash-drawer IPC
 
@@ -192,8 +192,9 @@ app.on('window-all-closed', () => {
 })
 
 // ─── IPC: License ─────────────────────────────────────────────────────────────
-ipcMain.handle('license-check',    ()         => checkLicense(store))
-ipcMain.handle('license-activate', (_, serial, email, phone, company) => activateLicense(store, serial, email, phone, company))
+ipcMain.handle('license-check',       ()         => checkLicense(store))
+ipcMain.handle('license-activate',    (_, serial, email, phone, company) => activateLicense(store, serial, email, phone, company))
+ipcMain.handle('license-start-trial', ()         => startTrial(store))
 
 // ─── IPC: electron-store ──────────────────────────────────────────────────────
 ipcMain.handle('store-get', (_, key) => store.get(key))

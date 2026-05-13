@@ -232,6 +232,7 @@ export default function LicenseGate({ children }) {
         setShowForm(false)
         setSuccess(false)
         setDismissed(false)
+        setSetupTab('activate')
       }, 1500)
     } else {
       setError(result.error)
@@ -242,8 +243,173 @@ export default function LicenseGate({ children }) {
     if (e.key === 'Enter') handleActivate()
   }
 
+  // ── First-run welcome screen ──────────────────────────────────────────────
+  const [setupTab,       setSetupTab]       = useState('activate') // 'activate' | 'trial'
+  const [trialLoading,   setTrialLoading]   = useState(false)
+
+  async function handleStartTrial() {
+    setTrialLoading(true)
+    const result = await window.electronAPI.licenseStartTrial()
+    setStatus(result.status)
+    setDaysLeft(result.daysLeft || 0)
+    setTrialLoading(false)
+  }
+
   if (status === null) return null
   if (status === 'active') return children
+
+  if (status === 'setup') {
+    return (
+      <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-6">
+        <div className="w-full max-w-md">
+
+          {/* Header */}
+          <div className="text-center mb-8">
+            <div className="text-5xl mb-4">🖥️</div>
+            <h1 className="text-white text-2xl font-bold">ERPNext POS</h1>
+            <p className="text-gray-400 text-sm mt-1">Welcome — choose how to get started</p>
+          </div>
+
+          {/* Tab switcher */}
+          <div className="flex bg-gray-800 rounded-xl p-1 mb-6 gap-1">
+            <button
+              onClick={() => setSetupTab('activate')}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors
+                ${setupTab === 'activate' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+              Activate License
+            </button>
+            <button
+              onClick={() => setSetupTab('trial')}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors
+                ${setupTab === 'trial' ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+              Start Free Trial
+            </button>
+          </div>
+
+          <div className="bg-gray-800 border border-gray-700 rounded-2xl p-6 shadow-2xl">
+
+            {/* ── Activate tab ── */}
+            {setupTab === 'activate' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-gray-300 text-xs font-medium mb-1">
+                    License Key <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={serial}
+                    onChange={(e) => { setSerial(e.target.value.toUpperCase()); setError('') }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleActivate() }}
+                    placeholder="XXXXX-XXXXX-XXXXX-XXXXX"
+                    maxLength={24}
+                    autoFocus
+                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white font-mono text-sm tracking-widest focus:outline-none focus:border-blue-500 placeholder-gray-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-gray-300 text-xs font-medium mb-1">
+                    Email Address <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => { setEmail(e.target.value); setError('') }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleActivate() }}
+                    placeholder="you@example.com"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder-gray-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-gray-300 text-xs font-medium mb-1">
+                    Phone Number <span className="text-red-400">*</span>
+                  </label>
+                  <div className="flex">
+                    <CountryCodePicker value={dialCode} onChange={setDialCode} />
+                    <input
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => { setPhone(e.target.value); setError('') }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleActivate() }}
+                      placeholder="77 123 4567"
+                      className="flex-1 bg-gray-700 border border-gray-600 border-l-0 rounded-r-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder-gray-500"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-gray-300 text-xs font-medium mb-1">
+                    Company / Business Name <span className="text-gray-500 font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={company}
+                    onChange={(e) => { setCompany(e.target.value); setError('') }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleActivate() }}
+                    placeholder="ABC Trading (Pvt) Ltd"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder-gray-500"
+                  />
+                </div>
+
+                {error   && <p className="text-red-400 text-xs">{error}</p>}
+                {success && <p className="text-green-400 text-xs font-medium">License activated! Starting…</p>}
+
+                <button
+                  onClick={handleActivate}
+                  disabled={loading || !serial.trim() || !email.trim() || !phone.trim()}
+                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg transition-colors text-sm"
+                >
+                  {loading ? 'Verifying…' : 'Activate License'}
+                </button>
+
+                <p className="text-gray-600 text-xs text-center">
+                  An internet connection is required. Contact your vendor for a key.
+                </p>
+              </div>
+            )}
+
+            {/* ── Trial tab ── */}
+            {setupTab === 'trial' && (
+              <div className="space-y-5 text-center">
+                <div className="text-4xl">⏱️</div>
+                <div>
+                  <h3 className="text-white font-semibold text-base mb-1">30-Day Free Trial</h3>
+                  <p className="text-gray-400 text-sm">
+                    Full access to all features for 30 days — no credit card required.
+                    You can activate your license key any time during or after the trial.
+                  </p>
+                </div>
+                <ul className="text-gray-300 text-sm space-y-1.5 text-left">
+                  {['Unlimited sales & invoices', 'All payment methods', 'Receipt printing', 'Sales summary & reports'].map((f) => (
+                    <li key={f} className="flex items-center gap-2">
+                      <span className="text-green-400 text-xs">✓</span> {f}
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  onClick={handleStartTrial}
+                  disabled={trialLoading}
+                  className="w-full bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white font-semibold py-2.5 rounded-lg transition-colors text-sm"
+                >
+                  {trialLoading ? 'Starting…' : 'Start 30-Day Trial'}
+                </button>
+                <p className="text-gray-600 text-xs">
+                  Have a key? Switch to the Activate tab above.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <p className="text-center text-gray-600 text-xs mt-4">
+            ERPNext POS · © {new Date().getFullYear()} Vijitha Rajapaksha
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   const urgentDays = daysLeft <= 7
 

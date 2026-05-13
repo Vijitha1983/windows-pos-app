@@ -19,8 +19,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openCashDrawer: (port) => ipcRenderer.invoke('open-cash-drawer', port),
 
   // License
-  licenseCheck:    ()       => ipcRenderer.invoke('license-check'),
-  licenseActivate: (serial, email, phone, company) => ipcRenderer.invoke('license-activate', serial, email, phone, company),
+  licenseCheck:      ()       => ipcRenderer.invoke('license-check'),
+  licenseActivate:   (serial, email, phone, company) => ipcRenderer.invoke('license-activate', serial, email, phone, company),
+  licenseStartTrial: ()       => ipcRenderer.invoke('license-start-trial'),
 
   // Window controls
   minimize: () => ipcRenderer.send('window-minimize'),
