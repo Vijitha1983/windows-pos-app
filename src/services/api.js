@@ -128,69 +128,34 @@ export async function resolveGiftCardAccount(modeName, company, accountShortName
 // ─── Category Wise Sales ─────────────────────────────────────────────────────
 
 // Returns { [item_group]: total_amount } for given POS + credit Sales invoice names.
-// Uses bulk child-table queries (2 calls total) instead of fetching each invoice individually.
+// Fetches each invoice document individually so the items child table (including
+// item_group) is always present — the bulk child-table query endpoint is unreliable
+// across ERPNext versions and returns empty results in some configurations.
 export async function getCategoryWiseSales(invoiceNames, creditInvoiceNames = []) {
   if ((!invoiceNames || invoiceNames.length === 0) && creditInvoiceNames.length === 0) return {}
 
-  // Fetch all invoice line items in two parallel calls via child table resources.
-  // parenttype filter is required by Frappe to correctly index child table rows.
-  const [posItemsRes, siItemsRes] = await Promise.all([
-    invoiceNames.length > 0
-      ? request('GET', '/api/resource/POS Invoice Item' + qs({
-          filters:           JSON.stringify([
-            ['parent',     'in', invoiceNames],
-            ['parenttype', '=', 'POS Invoice'],
-          ]),
-          fields:            JSON.stringify(['item_code', 'item_group', 'amount']),
-          limit_page_length: 5000,
-        })).catch((e) => { console.error('[CategoryWise] POS items fetch failed:', e?.message); return { data: [] }; })
-      : Promise.resolve({ data: [] }),
-    creditInvoiceNames.length > 0
-      ? request('GET', '/api/resource/Sales Invoice Item' + qs({
-          filters:           JSON.stringify([
-            ['parent',     'in', creditInvoiceNames],
-            ['parenttype', '=', 'Sales Invoice'],
-          ]),
-          fields:            JSON.stringify(['item_code', 'item_group', 'amount']),
-          limit_page_length: 5000,
-        })).catch((e) => { console.error('[CategoryWise] SI items fetch failed:', e?.message); return { data: [] }; })
-      : Promise.resolve({ data: [] }),
+  const [posResults, siResults] = await Promise.all([
+    Promise.all((invoiceNames || []).map((name) =>
+      request('GET', `/api/resource/POS Invoice/${encodeURIComponent(name)}`)
+        .then((res) => res.data?.items || [])
+        .catch(() => [])
+    )),
+    Promise.all((creditInvoiceNames || []).map((name) =>
+      request('GET', `/api/resource/Sales Invoice/${encodeURIComponent(name)}`)
+        .then((res) => res.data?.items || [])
+        .catch(() => [])
+    )),
   ])
 
-  const rawRows = [...(posItemsRes.data || []), ...(siItemsRes.data || [])]
-  console.log('[CategoryWise] raw rows fetched:', rawRows.length, 'POS:', posItemsRes.data?.length, 'SI:', siItemsRes.data?.length)
+  const allItems = [...posResults.flat(), ...siResults.flat()]
+    .filter((item) => item.item_code && parseFloat(item.amount) > 0)
 
-  const allRows = rawRows
-    .filter((r) => r.item_code && parseFloat(r.amount) > 0)
-    .map((r) => ({ item_code: r.item_code, item_group: r.item_group || null, amount: parseFloat(r.amount) }))
+  if (allItems.length === 0) return {}
 
-  console.log('[CategoryWise] rows after filter:', allRows.length, 'missing group:', allRows.filter(r => !r.item_group).length)
-  if (allRows.length === 0) return {}
-
-  // For any rows where item_group wasn't stored on the invoice, look it up from Item doctype
-  const missing = [...new Set(allRows.filter((r) => !r.item_group).map((r) => r.item_code))]
-  if (missing.length > 0) {
-    try {
-      const data = await request('GET', '/api/resource/Item' + qs({
-        filters:           JSON.stringify([['name', 'in', missing]]),
-        fields:            JSON.stringify(['name', 'item_group']),
-        limit_page_length: missing.length + 10,
-      }))
-      const map = {}
-      for (const item of data.data || []) {
-        if (item.name && item.item_group) map[item.name] = item.item_group
-      }
-      for (const row of allRows) {
-        if (!row.item_group && map[row.item_code]) row.item_group = map[row.item_code]
-      }
-    } catch { /* fall through — items without group go to 'Other' */ }
-  }
-
-  // Aggregate by item_group — items with no group go into 'Other'
   const result = {}
-  for (const row of allRows) {
-    const grp = row.item_group || 'Other'
-    result[grp] = (result[grp] || 0) + row.amount
+  for (const item of allItems) {
+    const grp = item.item_group || 'Other'
+    result[grp] = (result[grp] || 0) + parseFloat(item.amount)
   }
   return result
 }
@@ -520,12 +485,13 @@ export async function submitReturnInvoice(originalDoc, returnItems, posProfile, 
   // return total (positive number — items have negative qty so we reverse)
   const returnTotal = returnItems.reduce((sum, i) => sum + Math.abs(i.qty) * (i.rate || 0), 0)
 
-  // Use the primary non-zero payment mode from the original; fall back to Cash
-  const primaryMode = (originalDoc.payments || [])
-    .find((p) => Math.abs(p.amount) > 0)?.mode_of_payment || 'Cash'
-
-  // Payments must sum to -returnTotal so that paid_amount = grand_total and change = 0
-  const payments = [{ mode_of_payment: primaryMode, amount: -returnTotal }]
+  // Always record the return payment as Cash, regardless of original payment mode.
+  // For Exchange: the Cash return credit added in the new sale invoice (+returnTotal)
+  //   cancels this (-returnTotal), so Cash and original Koko Pay/Card are both correct.
+  // For Refund Only: the cashier gives physical cash back, so Cash is the right mode.
+  // Using the original mode (e.g. Koko Pay) would incorrectly deduct from Koko Pay
+  // in the day sales summary even though no Koko Pay was actually reversed.
+  const payments = [{ mode_of_payment: 'Cash', amount: -returnTotal }]
 
   const payload = {
     doctype:           'POS Invoice',
