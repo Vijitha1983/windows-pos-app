@@ -49,6 +49,10 @@ export const usePOSStore = create((set, get) => ({
   sessionStartDate: null,  // period_start_date from the opening entry (datetime string)
   soldInSession: {},       // { item_code: total_qty_sold } — real-time local adjustment
 
+  // Returns
+  returnCredit: 0,          // credit amount from a pending return invoice
+  returnInvoiceName: null,  // ERPNext name of the submitted return invoice
+
   // Modals
   itemDialog: null,        // { item, levels[] } — unified item/price/qty dialog
   priceLevelModal: null,   // kept for compat, no longer triggered
@@ -56,6 +60,7 @@ export const usePOSStore = create((set, get) => ({
   paymentModal: false,
   showOpeningModal: false,
   showSummaryModal: false,
+  showReturnModal: false,
   settingsOpen: false,
 
   // Actions
@@ -160,7 +165,10 @@ export const usePOSStore = create((set, get) => ({
     set((state) => ({ currentBill: { ...state.currentBill, customer } }))
   },
 
-  newBill: () => set({ currentBill: emptyBill(), selectedRow: -1, billPaymentType: 'Cash' }),
+  setReturnCredit: (amount, invoiceName) => set({ returnCredit: amount, returnInvoiceName: invoiceName }),
+  clearReturnCredit: () => set({ returnCredit: 0, returnInvoiceName: null }),
+
+  newBill: () => set({ currentBill: emptyBill(), selectedRow: -1, billPaymentType: 'Cash', returnCredit: 0, returnInvoiceName: null }),
 
   holdBill: () => {
     const bill = get().currentBill
@@ -213,6 +221,7 @@ export const usePOSStore = create((set, get) => ({
   closePaymentModal: () => set({ paymentModal: false }),
   setShowOpeningModal: (v) => set({ showOpeningModal: v }),
   setShowSummaryModal: (v) => set({ showSummaryModal: v }),
+  setShowReturnModal: (v) => set({ showReturnModal: v }),
   setSettingsOpen: (v) => set({ settingsOpen: v }),
 
   // Computed getters

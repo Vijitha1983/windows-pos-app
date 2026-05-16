@@ -455,6 +455,70 @@ export async function getPOSInvoices(filters = {}) {
   return data.data
 }
 
+// Search submitted POS Invoices (not returns) by invoice name, customer name, or date
+export async function searchPOSInvoices(query, posProfile) {
+  const base = [['docstatus', '=', 1], ['is_return', '=', 0]]
+  if (posProfile) base.push(['pos_profile', '=', posProfile])
+
+  const byName = request('GET', '/api/resource/POS Invoice' + qs({
+    fields: JSON.stringify(['name', 'customer', 'customer_name', 'grand_total', 'posting_date']),
+    filters: JSON.stringify([...base, ['name', 'like', `%${query}%`]]),
+    limit_page_length: 15,
+    order_by: 'posting_date desc',
+  }))
+  const byCust = request('GET', '/api/resource/POS Invoice' + qs({
+    fields: JSON.stringify(['name', 'customer', 'customer_name', 'grand_total', 'posting_date']),
+    filters: JSON.stringify([...base, ['customer_name', 'like', `%${query}%`]]),
+    limit_page_length: 15,
+    order_by: 'posting_date desc',
+  }))
+
+  const [r1, r2] = await Promise.all([byName, byCust])
+  const seen = new Set()
+  return [...r1.data, ...r2.data].filter((inv) => {
+    if (seen.has(inv.name)) return false
+    seen.add(inv.name)
+    return true
+  })
+}
+
+// Fetch a single POS Invoice with all its items
+export async function getPOSInvoiceDetail(name) {
+  const data = await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(name)}`)
+  return data.data
+}
+
+// Create and submit a return POS Invoice against an original invoice.
+// returnItems: [{ item_code, item_name, qty (positive), rate, uom, warehouse }]
+// Returns the submitted doc name.
+export async function submitReturnInvoice(originalDoc, returnItems, posProfile, posOpeningEntry) {
+  const today = new Date().toISOString().split('T')[0]
+  const draft = await request('POST', '/api/resource/POS Invoice', {
+    doctype:          'POS Invoice',
+    is_return:        1,
+    return_against:   originalDoc.name,
+    pos_profile:      posProfile,
+    company:          originalDoc.company,
+    currency:         originalDoc.currency,
+    customer:         originalDoc.customer,
+    posting_date:     today,
+    set_warehouse:    originalDoc.set_warehouse,
+    pos_opening_entry: posOpeningEntry,
+    items: returnItems.map((i) => ({
+      item_code: i.item_code,
+      item_name: i.item_name,
+      qty:       -Math.abs(i.qty),
+      rate:      i.rate,
+      uom:       i.uom || 'Nos',
+      warehouse: i.warehouse || originalDoc.set_warehouse,
+    })),
+    payments: [{ mode_of_payment: 'Cash', amount: 0 }],
+  })
+  const doc = draft.data
+  const submitted = await request('POST', '/api/method/frappe.client.submit', { doc })
+  return submitted.message || submitted
+}
+
 // ─── POS Opening / Closing Entry ─────────────────────────────────────────────
 
 // ERPNext expects datetime in the server's local timezone (YYYY-MM-DD HH:MM:SS).

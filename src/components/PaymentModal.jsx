@@ -12,6 +12,7 @@ export default function PaymentModal() {
     posOpeningEntry,
     billPaymentType, setBillPaymentType,
     addSoldToSession,
+    returnCredit, returnInvoiceName, clearReturnCredit,
   } = usePOSStore()
 
   const grandTotal  = getGrandTotal()
@@ -58,9 +59,10 @@ export default function PaymentModal() {
       methods.unshift({ mode_of_payment: 'Cash' })
     }
 
+    const initialNet = Math.max(0, grandTotal - (parseFloat(returnCredit) || 0))
     const initial = methods.map((m, i) => ({
       mode:       m.mode_of_payment,
-      amount:     i === 0 ? grandTotal : 0,
+      amount:     i === 0 ? initialNet : 0,
       autoFilled: false,
     }))
     setPayments(initial)
@@ -112,16 +114,17 @@ export default function PaymentModal() {
     return () => clearTimeout(serialDebounce.current)
   }, [giftSerial])
 
-  // When gift card amount changes, auto-reduce cash so cash + gift = grand total.
-  // This prevents the gift card from being treated as extra payment on top of cash.
+  // When gift card amount changes, auto-reduce cash so cash + gift + return = net total.
   useEffect(() => {
     if (!giftVoucher.show) return
-    const gift = parseFloat(giftVoucher.amount) || 0
+    const gift   = parseFloat(giftVoucher.amount) || 0
+    const retAmt = parseFloat(returnCredit) || 0
+    const net    = Math.max(0, grandTotal - retAmt)
     setPayments((prev) => {
       const cardTotal = prev
         .filter((p) => !p.mode.toLowerCase().includes('cash'))
         .reduce((s, p) => s + p.amount, 0)
-      const cashNeeded = Math.max(0, parseFloat((grandTotal - cardTotal - gift).toFixed(2)))
+      const cashNeeded = Math.max(0, parseFloat((net - cardTotal - gift).toFixed(2)))
       return prev.map((p) =>
         p.mode.toLowerCase().includes('cash') ? { ...p, amount: cashNeeded, autoFilled: gift > 0 } : p
       )
@@ -129,16 +132,20 @@ export default function PaymentModal() {
   }, [giftVoucher.amount])
 
   // ── Computed totals ──────────────────────────────────────────────────────
-  const giftAmt     = parseFloat(giftVoucher.amount) || 0
+  const giftAmt      = parseFloat(giftVoucher.amount) || 0
+  const returnAmt    = parseFloat(returnCredit) || 0
+  // grandTotal after deducting any return credit
+  const netTotal     = Math.max(0, parseFloat((grandTotal - returnAmt).toFixed(2)))
+
   const nonCashTotal = payments
     .filter((p) => !p.mode.toLowerCase().includes('cash'))
     .reduce((s, p) => s + p.amount, 0) + giftAmt
   const cashPayment = payments.find((p) => p.mode.toLowerCase().includes('cash'))
   const cashPaid    = cashPayment?.amount || 0
-  const cashNeeded  = Math.max(0, grandTotal - nonCashTotal)
+  const cashNeeded  = Math.max(0, netTotal - nonCashTotal)
   const change      = cashPaid > cashNeeded ? parseFloat((cashPaid - cashNeeded).toFixed(2)) : 0
 
-  const totalPaid     = payments.reduce((s, p) => s + p.amount, 0) + giftAmt
+  const totalPaid     = payments.reduce((s, p) => s + p.amount, 0) + giftAmt + returnAmt
   const effectivePaid = totalPaid - change
   const balanceDue    = parseFloat(Math.max(0, grandTotal - effectivePaid).toFixed(2))
 
@@ -148,6 +155,8 @@ export default function PaymentModal() {
     !!currentBill.customer &&
     currentBill.customer.name !== defaultCustomer &&
     currentBill.customer.customer_name?.toLowerCase() !== 'walk-in customer'
+  // Fully paid when: credit mode with valid customer, OR cash mode where balance = 0
+  // Return credit alone can cover the full bill (netTotal = 0)
   const isFullyPaid = paymentType === 'credit' ? creditCustomerValid : balanceDue < 0.01
 
   // ── Keyboard handler ────────────────────────────────────────────────────
@@ -234,12 +243,14 @@ export default function PaymentModal() {
     setGiftSerialData(null)
     setSerialSuggestions([])
     setSerialDropIdx(0)
-    // Restore cash to cover the full bill again
+    // Restore cash to cover the net total (after return credit) again
+    const retAmt = parseFloat(returnCredit) || 0
+    const net    = Math.max(0, grandTotal - retAmt)
     setPayments((prev) => {
       const cardTotal = prev
         .filter((p) => !p.mode.toLowerCase().includes('cash'))
         .reduce((s, p) => s + p.amount, 0)
-      const cashNeeded = Math.max(0, parseFloat((grandTotal - cardTotal).toFixed(2)))
+      const cashNeeded = Math.max(0, parseFloat((net - cardTotal).toFixed(2)))
       return prev.map((p) =>
         p.mode.toLowerCase().includes('cash') ? { ...p, amount: cashNeeded, autoFilled: false } : p
       )
@@ -296,7 +307,9 @@ export default function PaymentModal() {
           .filter((p) => !p.mode.toLowerCase().includes('cash'))
           .reduce((s, p) => s + p.amount, 0)
         const currentGift  = parseFloat(giftVoucher.amount) || 0
-        const cashNeeded   = Math.max(0, parseFloat((grandTotal - nonCashTotal - currentGift).toFixed(2)))
+        const retAmt       = parseFloat(returnCredit) || 0
+        const net          = Math.max(0, grandTotal - retAmt)
+        const cashNeeded   = Math.max(0, parseFloat((net - nonCashTotal - currentGift).toFixed(2)))
         return updated.map((p) =>
           p.mode.toLowerCase().includes('cash')
             ? { ...p, amount: cashNeeded, autoFilled: cashNeeded > 0 }
@@ -435,6 +448,7 @@ export default function PaymentModal() {
       : [
           ...payments.filter((p) => p.amount > 0),
           ...(giftAmt > 0 ? [{ mode: giftModeName, amount: giftAmt, serial: giftSerial }] : []),
+          ...(returnAmt > 0 ? [{ mode: `Return Credit (${returnInvoiceName || 'return'})`, amount: returnAmt }] : []),
         ]
     const payRows = allPayments.map((p) => `
         <tr>
@@ -498,9 +512,8 @@ export default function PaymentModal() {
   }
 
   function finishCheckout(changeAmt) {
-    // Record sold quantities so ItemGrid shows real-time adjusted stock
-    // without waiting for ERPNext's Bin table to update at session close.
     addSoldToSession(currentBill.items)
+    clearReturnCredit()
     if (changeAmt > 0) {
       setChangeOverlay(changeAmt)
       setTimeout(() => {
@@ -631,6 +644,18 @@ export default function PaymentModal() {
                 <div className="flex items-center justify-between mt-1">
                   <span className="text-gray-500 text-xs">Discount applied</span>
                   <span className="text-red-400 text-xs tabular-nums">− {fmt(discountAmt)}</span>
+                </div>
+              )}
+              {returnAmt > 0 && (
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-amber-400 text-xs">Return credit ({returnInvoiceName})</span>
+                  <span className="text-amber-400 text-xs tabular-nums">− {fmt(returnAmt)}</span>
+                </div>
+              )}
+              {returnAmt > 0 && (
+                <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-gray-700">
+                  <span className="text-white text-sm font-semibold">Net Due</span>
+                  <span className="text-white font-bold text-xl tabular-nums">{fmt(netTotal)}</span>
                 </div>
               )}
             </div>
@@ -965,6 +990,12 @@ export default function PaymentModal() {
             {/* ── Summary (cash mode only) ─────────────────────── */}
             {paymentType === 'cash' && (
               <div className="px-6 pb-2 space-y-2">
+                {returnAmt > 0 && (
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-amber-400">Return Credit</span>
+                    <span className="text-amber-400 font-semibold tabular-nums">{fmt(returnAmt)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-gray-400">Total Received</span>
                   <span className={`font-semibold tabular-nums ${

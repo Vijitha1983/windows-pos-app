@@ -26,7 +26,7 @@
 //   4. Deploy → Manage deployments → Edit → New version → Deploy
 //      (URL remains the same — no change needed in electron/license.js)
 
-var SHEET_ID   = 'YOUR_GOOGLE_SHEET_ID_HERE'  // ← replace with your sheet ID
+var SHEET_ID   = '1IZyeN3nobnqZTwvzj_0zWis_Z2TrRg70o5vV7ytPsDc'
 var SHEET_NAME = 'POS Activations'
 var TOKEN      = 'ERPNEXT-POS-ACTIVATE-2025'
 

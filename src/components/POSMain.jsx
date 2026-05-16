@@ -13,6 +13,7 @@ import SalesSummaryModal from './SalesSummaryModal'
 import Settings from './Settings'
 import OfflineQueueModal from './OfflineQueueModal'
 import VirtualKeyboard from './VirtualKeyboard'
+import ReturnTab from './ReturnTab'
 
 export default function POSMain() {
   const store = usePOSStore()
@@ -433,7 +434,14 @@ export default function POSMain() {
         )}
         <div className="flex flex-col" style={{ width: itemsHidden ? '100%' : '40%' }}>
           <div className="px-4 py-2 bg-gray-800 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
-            <h2 className="text-white font-semibold text-sm">Current Bill</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-white font-semibold text-sm">Current Bill</h2>
+              {store.returnCredit > 0 && (
+                <span className="text-xs bg-amber-900/60 border border-amber-700 text-amber-300 px-2 py-0.5 rounded-full">
+                  Return credit: {store.returnCredit.toFixed(2)}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               {/* Retail / Wholesale toggle (F7) */}
               <button
@@ -462,6 +470,16 @@ export default function POSMain() {
                 <span>{store.billPaymentType === 'Credit' ? '$ Credit' : '$ Cash'}</span>
                 <span className="opacity-40 font-mono font-normal">F8</span>
               </button>
+              <button
+                onClick={() => store.setShowReturnModal(true)}
+                title="Process a return / exchange"
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border transition-colors bg-red-900/40 border-red-700 text-red-300 hover:bg-red-800/60"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+                Return
+              </button>
               <span className="text-xs text-gray-500">{store.currentBill.items.length} items</span>
             </div>
           </div>
@@ -476,6 +494,7 @@ export default function POSMain() {
       <POSOpeningModal />
       <SalesSummaryModal />
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
+      {store.showReturnModal && <ReturnTab onClose={() => store.setShowReturnModal(false)} />}
       <VirtualKeyboard />
       {queueModalOpen && (
         <OfflineQueueModal
