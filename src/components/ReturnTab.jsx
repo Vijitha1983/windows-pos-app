@@ -106,10 +106,11 @@ export default function ReturnTab({ onClose }) {
       const invName = submitted?.name || (typeof submitted === 'string' ? submitted : invoice.name + '-Return')
 
       if (mode === 'exchange') {
-        // Carry the return credit into the next sale at checkout
+        // Carry the return credit into the next sale — cashier adds new items then checks out
         setReturnCredit(credit, invName)
         onClose()
-        openPaymentModal()
+        // Do NOT open payment modal — let cashier browse and add new items first.
+        // The credit badge in the bill header shows the pending return credit.
       } else {
         // Refund-only: show success screen — cashier gives cash back manually
         clearReturnCredit()
@@ -283,7 +284,7 @@ export default function ReturnTab({ onClose }) {
                   className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold py-3 rounded-xl transition-colors text-sm"
                 >
                   {submitting ? 'Processing…' : 'Exchange / New Sale'}
-                  {!submitting && <span className="block text-xs font-normal opacity-70 mt-0.5">Return credit offsets next sale</span>}
+                  {!submitting && <span className="block text-xs font-normal opacity-70 mt-0.5">Credit applied — add items then checkout</span>}
                 </button>
                 <button
                   onClick={() => handleReturn('refund')}

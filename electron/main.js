@@ -214,7 +214,7 @@ app.on('window-all-closed', () => {
 })
 
 // ─── IPC: License ─────────────────────────────────────────────────────────────
-ipcMain.handle('license-check',            ()         => checkLicense(store))
+ipcMain.handle('license-check',            ()         => isDev ? { status: 'active', daysLeft: 0 } : checkLicense(store))
 ipcMain.handle('license-activate',         (_, serial, email, phone, company) => activateLicense(store, serial, email, phone, company))
 ipcMain.handle('license-start-trial',      ()         => startTrial(store))
 ipcMain.handle('license-get-pending',      ()         => { const p = pendingActivation; pendingActivation = null; return p })
