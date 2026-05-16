@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { getTodayInvoiceSummary, closePOSSession, getCategoryWiseSales, sendSummaryEmail } from '../services/api'
+import { getTodayInvoiceSummary, closePOSSession, sendSummaryEmail } from '../services/api'
 
 export default function SalesSummaryModal() {
   const {
@@ -11,14 +11,14 @@ export default function SalesSummaryModal() {
   } = usePOSStore()
 
   const [loading,      setLoading]      = useState(false)
-  const [summary,      setSummary]      = useState(null)   // { invoices, totalSales, byMode, count }
-  const [byCategory,   setByCategory]   = useState({})     // { item_group: amount }
-  const [loadingCats,  setLoadingCats]  = useState(false)
+  const [summary,      setSummary]      = useState(null)   // { invoices, totalSales, byMode, returnTotal, count }
   const [closing,      setClosing]      = useState(false)
   const [closeErr,     setCloseErr]     = useState('')
+  const [closeErrRaw,  setCloseErrRaw]  = useState('')    // full traceback for copy
   const [closed,       setClosed]       = useState(false)
   const [mailing,      setMailing]      = useState(false)
   const [mailStatus,   setMailStatus]   = useState(null)   // null | 'ok' | 'err'
+  const [copied,       setCopied]       = useState(false)
   const containerRef = useRef(null)
 
   useEffect(() => {
@@ -35,46 +35,30 @@ export default function SalesSummaryModal() {
     try {
       const data = await getTodayInvoiceSummary(posProfile, sessionStartDate, username)
       setSummary(data)
-      // Load category breakdown from POS + credit invoice items
-      const posNames    = data.invoices?.map((i) => i.name) || []
-      const creditNames = data.creditInvoices?.map((i) => i.name) || []
-      if (posNames.length > 0 || creditNames.length > 0) {
-        setLoadingCats(true)
-        getCategoryWiseSales(posNames, creditNames)
-          .then((cats) => setByCategory(cats))
-          .catch(() => setByCategory({}))
-          .finally(() => setLoadingCats(false))
-      } else {
-        setByCategory({})
-      }
     } catch (err) {
       console.error('Summary fetch failed:', err)
-      setSummary({ invoices: [], totalSales: 0, byMode: {}, count: 0 })
-      setByCategory({})
+      setSummary({ invoices: [], totalSales: 0, byMode: {}, returnTotal: 0, count: 0 })
     } finally {
       setLoading(false)
     }
   }
 
   // ── Print summary ────────────────────────────────────────────────────────
-  function buildSummaryHtml(currentSummary, currentByCategory) {
+  function buildSummaryHtml(currentSummary) {
     const fmtN = (n) => parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    const company  = posProfileData?.company || 'POS'
-    const dateStr  = new Date().toLocaleString()
-    const byMode   = currentSummary?.byMode || {}
+    const company    = posProfileData?.company || 'POS'
+    const dateStr    = new Date().toLocaleString()
+    const byMode     = currentSummary?.byMode || {}
+    const retTotal   = currentSummary?.returnTotal || 0
     const cashKey    = Object.keys(byMode).find((k) => k.toLowerCase().includes('cash'))   || null
     const cardKey    = Object.keys(byMode).find((k) => k.toLowerCase().includes('card'))   || null
     const kokoKey    = Object.keys(byMode).find((k) => k.toLowerCase().includes('koko'))   || null
     const voucherKey = Object.keys(byMode).find((k) => k.toLowerCase().includes('gift') || k.toLowerCase().includes('voucher')) || null
     const otherModes = Object.entries(byMode).filter(([k]) => k !== cashKey && k !== cardKey && k !== kokoKey && k !== voucherKey)
+    const netCash    = Math.max(0, byMode[cashKey] || 0)
 
     const modeRow = (label, key, amount) => key !== null
-      ? `<tr><td>${label}</td><td style="text-align:right">${fmtN(amount)}</td></tr>` : ''
-
-    const catRows = Object.entries(currentByCategory || {})
-      .sort(([, a], [, b]) => b - a)
-      .map(([g, a]) => `<tr><td>${g}</td><td style="text-align:right">${fmtN(a)}</td></tr>`)
-      .join('')
+      ? `<tr><td>${label}</td><td style="text-align:right">${fmtN(Math.max(0, amount))}</td></tr>` : ''
 
     return `<!DOCTYPE html><html><head><meta charset="utf-8">
     <style>
@@ -98,7 +82,7 @@ export default function SalesSummaryModal() {
     <p class="sec">DAY SALES SUMMARY</p>
     <table>
       <tr class="tot"><td>Total Sales</td><td style="text-align:right">${fmtN(currentSummary?.totalSales)}</td></tr>
-      <tr><td>Invoices</td><td style="text-align:right">${currentSummary?.count || 0}</td></tr>
+      <tr><td>Invoices</td><td style="text-align:right">${currentSummary?.count || 0}${(currentSummary?.returnCount || 0) > 0 ? ` (+${currentSummary.returnCount} return)` : ''}</td></tr>
     </table>
     <div class="sep"></div>
 
@@ -108,7 +92,8 @@ export default function SalesSummaryModal() {
       ${modeRow('Card', cardKey, byMode[cardKey])}
       ${modeRow('Koko Pay', kokoKey, byMode[kokoKey])}
       ${modeRow('Gift Voucher', voucherKey, byMode[voucherKey])}
-      ${otherModes.map(([k, v]) => `<tr><td>${k}</td><td style="text-align:right">${fmtN(v)}</td></tr>`).join('')}
+      ${otherModes.filter(([, v]) => v > 0).map(([k, v]) => `<tr><td>${k}</td><td style="text-align:right">${fmtN(v)}</td></tr>`).join('')}
+      ${retTotal > 0 ? `<tr><td>Return / Exchange</td><td style="text-align:right">(${fmtN(retTotal)})</td></tr>` : ''}
       ${(currentSummary?.creditTotal > 0) ? `<tr><td>Credit Sales (Receivable)</td><td style="text-align:right">${fmtN(currentSummary.creditTotal)}</td></tr>` : ''}
     </table>
     <div class="sep"></div>
@@ -116,45 +101,40 @@ export default function SalesSummaryModal() {
     <p class="sec">CASHIER SUMMARY</p>
     <table>
       <tr><td>Opening Cash</td><td style="text-align:right">${fmtN(openingCash)}</td></tr>
-      <tr><td>Day Cash Collected</td><td style="text-align:right">${fmtN(byMode[cashKey])}</td></tr>
-      <tr class="tot"><td>Total Cash in Cashier</td><td style="text-align:right">${fmtN(openingCash + (byMode[cashKey] || 0))}</td></tr>
+      <tr><td>Day Cash Collected</td><td style="text-align:right">${fmtN(netCash)}</td></tr>
+      ${retTotal > 0 ? `<tr><td>Return / Exchange (setoff)</td><td style="text-align:right">${fmtN(retTotal)}</td></tr>` : ''}
+      <tr class="tot"><td>Total Cash in Cashier</td><td style="text-align:right">${fmtN(openingCash + netCash)}</td></tr>
     </table>
-
-    ${catRows ? `
-    <div class="sep"></div>
-    <p class="sec">CATEGORY WISE SALES</p>
-    <table>${catRows}</table>` : ''}
 
     <div class="sep"></div>
     <p class="c" style="margin-top:6px;font-size:10px">*** End of Report ***</p>
     </body></html>`
   }
 
-  async function printSummary(snapshotSummary, snapshotCats) {
+  async function printSummary(snapshotSummary) {
     try {
-      const html = buildSummaryHtml(snapshotSummary ?? summary, snapshotCats ?? byCategory)
+      const html = buildSummaryHtml(snapshotSummary ?? summary)
       if (window.electronAPI?.printReceipt) await window.electronAPI.printReceipt(html)
     } catch (e) {
       console.error('Summary print failed:', e)
     }
   }
 
-  function buildEmailHtml(currentSummary, currentByCategory) {
+  function buildEmailHtml(currentSummary) {
     const fmtN = (n) => parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    const company  = posProfileData?.company || 'POS'
-    const dateStr  = new Date().toLocaleString()
-    const byMode   = currentSummary?.byMode || {}
+    const company    = posProfileData?.company || 'POS'
+    const dateStr    = new Date().toLocaleString()
+    const byMode     = currentSummary?.byMode || {}
+    const retTotal   = currentSummary?.returnTotal || 0
     const cashKey    = Object.keys(byMode).find((k) => k.toLowerCase().includes('cash'))   || null
     const cardKey    = Object.keys(byMode).find((k) => k.toLowerCase().includes('card'))   || null
     const kokoKey    = Object.keys(byMode).find((k) => k.toLowerCase().includes('koko'))   || null
     const voucherKey = Object.keys(byMode).find((k) => k.toLowerCase().includes('gift') || k.toLowerCase().includes('voucher')) || null
     const otherModes = Object.entries(byMode).filter(([k]) => k !== cashKey && k !== cardKey && k !== kokoKey && k !== voucherKey)
+    const netCash    = Math.max(0, byMode[cashKey] || 0)
     const cell  = (v, bold) => `<td style="padding:4px 8px;${bold ? 'font-weight:bold;' : ''}">${v}</td>`
     const rcell = (v, bold, color) => `<td style="padding:4px 8px;text-align:right;${bold ? 'font-weight:bold;' : ''}${color ? `color:${color};` : ''}">${v}</td>`
-    const modeRow = (label, key, val) => key ? `<tr>${cell(label)}${rcell(fmtN(val))}</tr>` : ''
-    const catRows = Object.entries(currentByCategory || {})
-      .sort(([, a], [, b]) => b - a)
-      .map(([g, a]) => `<tr>${cell(g)}${rcell(fmtN(a))}</tr>`).join('')
+    const modeRow = (label, key, val) => key && val > 0 ? `<tr>${cell(label)}${rcell(fmtN(Math.max(0, val)))}</tr>` : ''
 
     return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;font-size:13px;color:#222;max-width:500px;margin:0 auto">
       <h2 style="background:#1e3a5f;color:#fff;padding:12px 16px;margin:0">${company} — Sales Summary</h2>
@@ -165,7 +145,7 @@ export default function SalesSummaryModal() {
           <thead><tr style="background:#e8f0fe"><td colspan="2" style="padding:6px 8px;font-weight:bold">DAY SALES SUMMARY</td></tr></thead>
           <tbody>
             <tr style="font-size:15px;font-weight:bold">${cell('Total Sales')}${rcell(fmtN(currentSummary?.totalSales), true, '#1a56db')}</tr>
-            <tr>${cell('Total Invoices')}${rcell(currentSummary?.count || 0)}</tr>
+            <tr>${cell('Invoices')}${rcell(`${currentSummary?.count || 0}${(currentSummary?.returnCount || 0) > 0 ? ` (+${currentSummary.returnCount} return)` : ''}`)}</tr>
           </tbody>
         </table>
 
@@ -176,7 +156,8 @@ export default function SalesSummaryModal() {
             ${modeRow('Card', cardKey, byMode[cardKey])}
             ${modeRow('Koko Pay', kokoKey, byMode[kokoKey])}
             ${modeRow('Gift Voucher', voucherKey, byMode[voucherKey])}
-            ${otherModes.map(([k, v]) => `<tr>${cell(k)}${rcell(fmtN(v))}</tr>`).join('')}
+            ${otherModes.filter(([, v]) => v > 0).map(([k, v]) => `<tr>${cell(k)}${rcell(fmtN(v))}</tr>`).join('')}
+            ${retTotal > 0 ? `<tr>${cell('Return / Exchange (setoff)')}${rcell('(' + fmtN(retTotal) + ')', false, '#d97706')}</tr>` : ''}
             ${(currentSummary?.creditTotal > 0) ? `<tr>${cell('Credit Sales (Receivable)')}${rcell(fmtN(currentSummary.creditTotal), false, '#d97706')}</tr>` : ''}
           </tbody>
         </table>
@@ -185,16 +166,11 @@ export default function SalesSummaryModal() {
           <thead><tr style="background:#e8f0fe"><td colspan="2" style="padding:6px 8px;font-weight:bold">CASHIER SUMMARY</td></tr></thead>
           <tbody>
             <tr>${cell('Opening Cash')}${rcell(fmtN(openingCash))}</tr>
-            <tr>${cell('Day Cash Collected')}${rcell(fmtN(byMode[cashKey]))}</tr>
-            <tr style="font-size:14px">${cell('<strong>Total Cash in Cashier</strong>')}${rcell(fmtN(openingCash + (byMode[cashKey] || 0)), true, '#b45309')}</tr>
+            <tr>${cell('Day Cash Collected')}${rcell(fmtN(netCash))}</tr>
+            ${retTotal > 0 ? `<tr>${cell('Return / Exchange (setoff)')}${rcell(fmtN(retTotal), false, '#d97706')}</tr>` : ''}
+            <tr style="font-size:14px">${cell('<strong>Total Cash in Cashier</strong>')}${rcell(fmtN(openingCash + netCash), true, '#b45309')}</tr>
           </tbody>
         </table>
-
-        ${catRows ? `
-        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
-          <thead><tr style="background:#e8f0fe"><td colspan="2" style="padding:6px 8px;font-weight:bold">CATEGORY WISE SALES</td></tr></thead>
-          <tbody>${catRows}</tbody>
-        </table>` : ''}
       </div>
       <p style="padding:8px 16px;margin:0;font-size:11px;color:#888">This report was generated automatically by ERPNext POS.</p>
     </body></html>`
@@ -208,7 +184,7 @@ export default function SalesSummaryModal() {
     try {
       const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
       const subject = `Sales Summary — ${posProfileData?.company || posProfile} — ${today}`
-      const html = buildEmailHtml(summary, byCategory)
+      const html = buildEmailHtml(summary)
       await sendSummaryEmail(toEmail, subject, html)
       setMailStatus('ok')
       setTimeout(() => setMailStatus(null), 4000)
@@ -224,6 +200,7 @@ export default function SalesSummaryModal() {
     if (!posOpeningEntry || !summary) return
     setClosing(true)
     setCloseErr('')
+    setCloseErrRaw('')
     try {
       await closePOSSession(
         posOpeningEntry,
@@ -237,9 +214,13 @@ export default function SalesSummaryModal() {
       clearPOSSession()
       setClosed(true)
       // Auto-print summary on session close — snapshot current data before it resets
-      printSummary(summary, byCategory)
+      printSummary(summary)
     } catch (err) {
       const data = err?.response?.data || {}
+
+      // Save raw traceback for copy button
+      const rawExc = data.exc || ''
+      setCloseErrRaw(rawExc || err.message || '')
 
       // ERPNext puts the real message in _server_messages (JSON array of objects)
       let plain = ''
@@ -283,6 +264,26 @@ export default function SalesSummaryModal() {
     }
   }
 
+  async function copyErrorToClipboard() {
+    const text = closeErrRaw || closeErr
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2500)
+    } catch {
+      // Fallback: write to a textarea and execCommand
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2500)
+    }
+  }
+
   function handleClose() {
     setShowSummaryModal(false)
     // If session was just closed, prompt to open a new one
@@ -308,15 +309,17 @@ export default function SalesSummaryModal() {
   const voucherKey = Object.keys(byMode).find(
     (k) => k.toLowerCase().includes('gift') || k.toLowerCase().includes('voucher')
   ) || null
-  const cashSales    = cashKey    ? (byMode[cashKey]    || 0) : 0
-  const cardSales    = cardKey    ? (byMode[cardKey]    || 0) : 0
-  const kokoSales    = kokoKey    ? (byMode[kokoKey]    || 0) : 0
-  const voucherSales = voucherKey ? (byMode[voucherKey] || 0) : 0
+  // byMode values are net (return payments already subtracted) — floor at 0 for display
+  const cashSales    = Math.max(0, cashKey    ? (byMode[cashKey]    || 0) : 0)
+  const cardSales    = Math.max(0, cardKey    ? (byMode[cardKey]    || 0) : 0)
+  const kokoSales    = Math.max(0, kokoKey    ? (byMode[kokoKey]    || 0) : 0)
+  const voucherSales = Math.max(0, voucherKey ? (byMode[voucherKey] || 0) : 0)
   const otherModes = Object.entries(byMode).filter(
-    ([k]) => k !== cashKey && k !== cardKey && k !== kokoKey && k !== voucherKey
+    ([k, v]) => k !== cashKey && k !== cardKey && k !== kokoKey && k !== voucherKey && v > 0
   )
+  const returnTotal   = summary?.returnTotal || 0
 
-  // Cashier figures
+  // Cashier figures — cashSales is already net of returns
   const cashCollected  = cashSales
   const totalInCashier = openingCash + cashCollected
 
@@ -454,6 +457,7 @@ export default function SalesSummaryModal() {
                   <span className="ml-auto text-xs text-gray-500">
                     {(summary.count + (summary.creditCount || 0))} invoice{(summary.count + (summary.creditCount || 0)) !== 1 ? 's' : ''}
                     {summary.creditCount > 0 && <span className="text-amber-500 ml-1">({summary.creditCount} credit)</span>}
+                    {(summary.returnCount || 0) > 0 && <span className="text-red-400 ml-1">({summary.returnCount} return)</span>}
                   </span>
                 </div>
 
@@ -551,6 +555,17 @@ export default function SalesSummaryModal() {
                     </span>
                   </div>
 
+                  {/* Return / Exchange offset */}
+                  {returnTotal > 0 && (
+                    <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-700/40">
+                      <div className="flex items-center gap-2.5 pl-4">
+                        <div className="w-2 h-2 rounded-full bg-red-400" />
+                        <span className="text-gray-400 text-sm">Return / Exchange</span>
+                      </div>
+                      <span className="text-red-400 font-semibold tabular-nums text-sm">({fmt(returnTotal)})</span>
+                    </div>
+                  )}
+
                   {/* Credit Sales (Sales Invoices — receivables) */}
                   {summary.creditTotal > 0 && (
                     <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-700/40">
@@ -644,6 +659,24 @@ export default function SalesSummaryModal() {
                     </span>
                   </div>
 
+                  {/* Return / Exchange offset — not real cash, setoff only */}
+                  {returnTotal > 0 && (
+                    <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700/40 bg-amber-900/10">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-amber-600/10 flex items-center justify-center">
+                          <svg className="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-amber-300 text-sm font-medium">Return / Exchange</p>
+                          <p className="text-gray-600 text-xs">Setoff — no cash movement</p>
+                        </div>
+                      </div>
+                      <span className="text-amber-400 font-semibold tabular-nums text-sm">{fmt(returnTotal)}</span>
+                    </div>
+                  )}
+
                   {/* Total Cash in Cashier — highlighted */}
                   <div className="flex items-center justify-between px-5 py-4 bg-amber-900/20">
                     <div className="flex items-center gap-2.5">
@@ -659,53 +692,25 @@ export default function SalesSummaryModal() {
                 </div>
               </section>
 
-              {/* ══ CATEGORY WISE SALES ══ */}
-              <section>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-1 h-5 rounded-full bg-teal-500" />
-                  <h3 className="text-white font-bold text-sm uppercase tracking-wider">Category Wise Sales</h3>
-                  {loadingCats && (
-                    <svg className="w-3.5 h-3.5 animate-spin text-gray-500 ml-1" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                    </svg>
-                  )}
-                </div>
-
-                <div className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden">
-                  {Object.keys(byCategory).length === 0 ? (
-                    <div className="px-5 py-5 text-center text-gray-500 text-sm">
-                      {loadingCats ? 'Loading…' : summary.count === 0 ? 'No sales today' : 'Category data unavailable'}
-                    </div>
-                  ) : (
-                    Object.entries(byCategory)
-                      .sort(([, a], [, b]) => b - a)
-                      .map(([group, amount], i, arr) => {
-                        const pct = summary.totalSales > 0 ? ((amount / summary.totalSales) * 100).toFixed(0) : 0
-                        return (
-                          <div
-                            key={group}
-                            className={`flex items-center justify-between px-5 py-3.5 ${i < arr.length - 1 ? 'border-b border-gray-700/40' : ''}`}
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-2 h-2 rounded-full bg-teal-500 flex-shrink-0" />
-                              <span className="text-gray-300 text-sm">{group}</span>
-                              <span className="text-gray-600 text-xs">{pct}%</span>
-                            </div>
-                            <span className="text-teal-400 font-semibold tabular-nums text-sm">{fmt(amount)}</span>
-                          </div>
-                        )
-                      })
-                  )}
-                </div>
-              </section>
             </>
           )}
 
           {/* Close session error */}
           {closeErr && (
-            <div className="bg-red-900/40 border border-red-700 rounded-lg px-4 py-2.5 text-red-300 text-sm break-words">
-              {closeErr}
+            <div className="bg-red-900/40 border border-red-700 rounded-lg px-4 py-3 text-red-300 text-sm break-words">
+              <p>{closeErr}</p>
+              {closeErrRaw && (
+                <button
+                  onClick={copyErrorToClipboard}
+                  className={`mt-2 text-xs px-3 py-1.5 rounded border transition-colors ${
+                    copied
+                      ? 'border-green-600 text-green-400 bg-green-900/20'
+                      : 'border-red-600 text-red-400 hover:bg-red-900/30'
+                  }`}
+                >
+                  {copied ? '✓ Copied to clipboard' : 'Copy full error details'}
+                </button>
+              )}
             </div>
           )}
         </div>

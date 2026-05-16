@@ -494,26 +494,31 @@ export async function getPOSInvoiceDetail(name) {
 export async function submitReturnInvoice(originalDoc, returnItems, posProfile, posOpeningEntry) {
   const today = new Date().toISOString().split('T')[0]
 
-  // Build item rows: copy every field from the original item so ERPNext has all
-  // back-references it needs for return validation. Strip 'name' (child row docname)
-  // to avoid triggering an update instead of insert. Flip qty to negative.
-  const items = returnItems.map((originalItem) => {
-    // eslint-disable-next-line no-unused-vars
-    const { name: _childName, ...rest } = originalItem
-    return {
-      ...rest,
-      qty:                -Math.abs(originalItem.qty),
-      // sales_invoice_item links this return row to the original invoice row
-      sales_invoice_item: originalItem.name,
-    }
-  })
-
-  // Mirror the original invoice's payments with negative amounts (matches ERPNext web UI behaviour)
-  const payments = (originalDoc.payments || []).map((p) => ({
-    mode_of_payment: p.mode_of_payment,
-    amount:          -(Math.abs(p.amount) || 0),
+  // Build item rows with only business fields — strip child-table metadata
+  // (parent, parenttype, parentfield, doctype, name) so ERPNext doesn't
+  // confuse these rows with existing rows in the original invoice.
+  const items = returnItems.map((originalItem) => ({
+    item_code: originalItem.item_code,
+    item_name: originalItem.item_name,
+    qty:       -Math.abs(originalItem.qty),
+    rate:      originalItem.rate,
+    uom:       originalItem.uom || 'Nos',
+    warehouse: originalItem.warehouse || originalDoc.set_warehouse,
+    ...(originalItem.serial_no ? { serial_no: originalItem.serial_no } : {}),
+    ...(originalItem.batch_no  ? { batch_no:  originalItem.batch_no  } : {}),
+    // sales_invoice_item intentionally omitted — it links to Sales Invoice Item
+    // (not POS Invoice Item) and causes a NoneType TypeError in ERPNext's validator
   }))
-  if (payments.length === 0) payments.push({ mode_of_payment: 'Cash', amount: 0 })
+
+  // return total (positive number — items have negative qty so we reverse)
+  const returnTotal = returnItems.reduce((sum, i) => sum + Math.abs(i.qty) * (i.rate || 0), 0)
+
+  // Use the primary non-zero payment mode from the original; fall back to Cash
+  const primaryMode = (originalDoc.payments || [])
+    .find((p) => Math.abs(p.amount) > 0)?.mode_of_payment || 'Cash'
+
+  // Payments must sum to -returnTotal so that paid_amount = grand_total and change = 0
+  const payments = [{ mode_of_payment: primaryMode, amount: -returnTotal }]
 
   const payload = {
     doctype:           'POS Invoice',
@@ -526,11 +531,19 @@ export async function submitReturnInvoice(originalDoc, returnItems, posProfile, 
     posting_date:      today,
     set_warehouse:     originalDoc.set_warehouse,
     pos_opening_entry: posOpeningEntry,
+    paid_amount:       -returnTotal,   // ERPNext skips computing this for returns
     items,
     payments,
   }
 
-  const draft     = await request('POST', '/api/resource/POS Invoice', payload)
+  let draft
+  try {
+    draft = await request('POST', '/api/resource/POS Invoice', payload)
+  } catch (err) {
+    console.error('[Return] create failed — message:', err?.message)
+    console.error('[Return] full traceback:\n', err?.response?.data?.exc)
+    throw err
+  }
   const doc       = draft.data
   const submitted = await request('POST', '/api/method/frappe.client.submit', { doc })
   return submitted.message || submitted
@@ -591,7 +604,7 @@ export async function createPOSOpeningEntry(posProfile, company, user, paymentMe
   return sub.message || full.data
 }
 
-// Returns { invoices, creditInvoices, totalSales, creditTotal, byMode, count, creditCount }
+// Returns { invoices, creditInvoices, totalSales, creditTotal, byMode, returnTotal, count, creditCount, returnCount }
 export async function getTodayInvoiceSummary(posProfile, sessionStartDate, username) {
   const today = new Date().toISOString().split('T')[0]
 
@@ -614,7 +627,7 @@ export async function getTodayInvoiceSummary(posProfile, sessionStartDate, usern
   const [invoicesRes, siRes] = await Promise.all([
     request('GET', '/api/resource/POS Invoice' + qs({
       filters:           JSON.stringify(posFilters),
-      fields:            JSON.stringify(['name', 'grand_total', 'customer', 'consolidated_invoice']),
+      fields:            JSON.stringify(['name', 'grand_total', 'customer', 'consolidated_invoice', 'is_return', 'return_against']),
       limit_page_length: 500,
       order_by:          'creation desc',
     })),
@@ -626,19 +639,26 @@ export async function getTodayInvoiceSummary(posProfile, sessionStartDate, usern
     })).catch(() => ({ data: [] })),  // offline or permission issue — skip credit
   ])
 
-  const invoices       = invoicesRes.data || []
-  const creditInvoices = siRes.data || []
+  const allInvoices     = invoicesRes.data || []
+  // Return invoices have is_return=1 and negative grand_total
+  const regularInvoices = allInvoices.filter((inv) => !inv.is_return)
+  const returnInvCount  = allInvoices.length - regularInvoices.length
+  const creditInvoices  = siRes.data || []
 
   const creditTotal = creditInvoices.reduce((s, i) => s + (i.grand_total || 0), 0)
-  const totalSales  = invoices.reduce((s, i) => s + (i.grand_total || 0), 0) + creditTotal
+  // Return invoice grand_total is negative in ERPNext — this gives correct net total
+  const totalSales  = allInvoices.reduce((s, i) => s + (i.grand_total || 0), 0) + creditTotal
 
-  if (invoices.length === 0 && creditInvoices.length === 0) {
-    return { invoices: [], creditInvoices: [], totalSales: 0, creditTotal: 0, byMode: {}, count: 0, creditCount: 0 }
+  if (allInvoices.length === 0 && creditInvoices.length === 0) {
+    return { invoices: [], creditInvoices: [], totalSales: 0, creditTotal: 0, byMode: {}, returnTotal: 0, count: 0, creditCount: 0, returnCount: 0 }
   }
 
-  // ── Payment breakdown (POS Invoices only) ────────────────────────────────
-  const names = invoices.map((i) => i.name)
+  // ── Payment breakdown (all POS Invoices incl. returns) ───────────────────
+  // Including negative return payments nets them against exchange invoice cash,
+  // so byMode['Cash'] shows actual cash collected (not inflated by return credits).
+  const names = allInvoices.map((i) => i.name)
   let byMode = {}
+  let returnTotal = 0
 
   if (names.length > 0) {
     try {
@@ -651,14 +671,16 @@ export async function getTodayInvoiceSummary(posProfile, sessionStartDate, usern
         limit_page_length: 2000,
       }))
       for (const p of paymentsRes.data || []) {
-        if (p.amount > 0) byMode[p.mode_of_payment] = (byMode[p.mode_of_payment] || 0) + p.amount
+        byMode[p.mode_of_payment] = (byMode[p.mode_of_payment] || 0) + p.amount
+        if (p.amount < 0) returnTotal += Math.abs(p.amount)
       }
     } catch {
-      for (const inv of invoices.slice(0, 200)) {
+      for (const inv of allInvoices.slice(0, 200)) {
         try {
           const doc = await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(inv.name)}`)
           for (const p of doc.data?.payments || []) {
-            if (p.amount > 0) byMode[p.mode_of_payment] = (byMode[p.mode_of_payment] || 0) + p.amount
+            byMode[p.mode_of_payment] = (byMode[p.mode_of_payment] || 0) + p.amount
+            if (p.amount < 0) returnTotal += Math.abs(p.amount)
           }
         } catch { /* skip */ }
       }
@@ -666,11 +688,13 @@ export async function getTodayInvoiceSummary(posProfile, sessionStartDate, usern
   }
 
   return {
-    invoices, creditInvoices,
+    invoices: allInvoices, creditInvoices,
     totalSales, creditTotal,
     byMode,
-    count: invoices.length,
+    returnTotal,
+    count: regularInvoices.length,
     creditCount: creditInvoices.length,
+    returnCount: returnInvCount,
   }
 }
 
@@ -690,6 +714,29 @@ export async function closePOSSession(posOpeningEntry, posProfile, company, user
     customer:     inv.customer || '',
     posting_date: today,
   }))
+
+  // ERPNext requires a return invoice's original to be consolidated before or
+  // alongside the return. If the original is from a previous session and was
+  // never consolidated, add it to pos_transactions so ERPNext can process them
+  // together and satisfy the validation.
+  const includedNames = new Set(posTransactions.map((t) => t.pos_invoice))
+  for (const inv of openInvoices) {
+    if (inv.is_return && inv.return_against && !includedNames.has(inv.return_against)) {
+      try {
+        const origRes = await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(inv.return_against)}`)
+        const orig = origRes.data
+        if (orig && !orig.consolidated_invoice) {
+          posTransactions.unshift({
+            pos_invoice:  orig.name,
+            grand_total:  orig.grand_total,
+            customer:     orig.customer || '',
+            posting_date: orig.posting_date || today,
+          })
+          includedNames.add(orig.name)
+        }
+      } catch { /* original not found or already handled — proceed */ }
+    }
+  }
 
   // Build reconciliation starting from all modes in the opening entry, so every
   // configured payment method is present even if it had zero sales today.

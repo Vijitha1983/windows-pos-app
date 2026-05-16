@@ -363,6 +363,14 @@ export default function PaymentModal() {
         amount: giftAmt,
         ...(giftAccount ? { account: giftAccount } : {}),
       }] : []),
+      // Return credit: add as Cash so ERPNext sees the invoice as fully paid.
+      // The return invoice already booked the offsetting negative entry, so these
+      // cancel out correctly in the POS session closing reconciliation.
+      ...(returnAmt > 0 ? [{
+        mode_of_payment: 'Cash',
+        amount: returnAmt,
+        ...(cashAccount ? { account: cashAccount } : {}),
+      }] : []),
     ]
 
     const doc = {
