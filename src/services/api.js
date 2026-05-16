@@ -132,31 +132,39 @@ export async function resolveGiftCardAccount(modeName, company, accountShortName
 export async function getCategoryWiseSales(invoiceNames, creditInvoiceNames = []) {
   if ((!invoiceNames || invoiceNames.length === 0) && creditInvoiceNames.length === 0) return {}
 
-  // Fetch all invoice line items in two parallel calls via child table resources
+  // Fetch all invoice line items in two parallel calls via child table resources.
+  // parenttype filter is required by Frappe to correctly index child table rows.
   const [posItemsRes, siItemsRes] = await Promise.all([
     invoiceNames.length > 0
       ? request('GET', '/api/resource/POS Invoice Item' + qs({
-          filters:           JSON.stringify([['parent', 'in', invoiceNames]]),
+          filters:           JSON.stringify([
+            ['parent',     'in', invoiceNames],
+            ['parenttype', '=', 'POS Invoice'],
+          ]),
           fields:            JSON.stringify(['item_code', 'item_group', 'amount']),
-          limit_page_length: 2000,
-        })).catch(() => ({ data: [] }))
+          limit_page_length: 5000,
+        })).catch((e) => { console.error('[CategoryWise] POS items fetch failed:', e?.message); return { data: [] }; })
       : Promise.resolve({ data: [] }),
     creditInvoiceNames.length > 0
       ? request('GET', '/api/resource/Sales Invoice Item' + qs({
-          filters:           JSON.stringify([['parent', 'in', creditInvoiceNames]]),
+          filters:           JSON.stringify([
+            ['parent',     'in', creditInvoiceNames],
+            ['parenttype', '=', 'Sales Invoice'],
+          ]),
           fields:            JSON.stringify(['item_code', 'item_group', 'amount']),
-          limit_page_length: 2000,
-        })).catch(() => ({ data: [] }))
+          limit_page_length: 5000,
+        })).catch((e) => { console.error('[CategoryWise] SI items fetch failed:', e?.message); return { data: [] }; })
       : Promise.resolve({ data: [] }),
   ])
 
-  const allRows = [
-    ...(posItemsRes.data || []),
-    ...(siItemsRes.data || []),
-  ]
+  const rawRows = [...(posItemsRes.data || []), ...(siItemsRes.data || [])]
+  console.log('[CategoryWise] raw rows fetched:', rawRows.length, 'POS:', posItemsRes.data?.length, 'SI:', siItemsRes.data?.length)
+
+  const allRows = rawRows
     .filter((r) => r.item_code && parseFloat(r.amount) > 0)
     .map((r) => ({ item_code: r.item_code, item_group: r.item_group || null, amount: parseFloat(r.amount) }))
 
+  console.log('[CategoryWise] rows after filter:', allRows.length, 'missing group:', allRows.filter(r => !r.item_group).length)
   if (allRows.length === 0) return {}
 
   // For any rows where item_group wasn't stored on the invoice, look it up from Item doctype
