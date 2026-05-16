@@ -154,8 +154,8 @@ export async function getCategoryWiseSales(invoiceNames, creditInvoiceNames = []
     ...(posItemsRes.data || []),
     ...(siItemsRes.data || []),
   ]
-    .filter((r) => r.item_code && r.amount > 0)
-    .map((r) => ({ item_code: r.item_code, item_group: r.item_group || null, amount: r.amount }))
+    .filter((r) => r.item_code && parseFloat(r.amount) > 0)
+    .map((r) => ({ item_code: r.item_code, item_group: r.item_group || null, amount: parseFloat(r.amount) }))
 
   if (allRows.length === 0) return {}
 
@@ -175,15 +175,14 @@ export async function getCategoryWiseSales(invoiceNames, creditInvoiceNames = []
       for (const row of allRows) {
         if (!row.item_group && map[row.item_code]) row.item_group = map[row.item_code]
       }
-    } catch {}
+    } catch { /* fall through — items without group go to 'Other' */ }
   }
 
-  // Aggregate by item_group
+  // Aggregate by item_group — items with no group go into 'Other'
   const result = {}
   for (const row of allRows) {
-    if (row.item_group) {
-      result[row.item_group] = (result[row.item_group] || 0) + row.amount
-    }
+    const grp = row.item_group || 'Other'
+    result[grp] = (result[grp] || 0) + row.amount
   }
   return result
 }

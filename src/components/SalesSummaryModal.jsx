@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { getTodayInvoiceSummary, closePOSSession, sendSummaryEmail } from '../services/api'
+import { getTodayInvoiceSummary, closePOSSession, getCategoryWiseSales, sendSummaryEmail } from '../services/api'
 
 export default function SalesSummaryModal() {
   const {
@@ -12,6 +12,8 @@ export default function SalesSummaryModal() {
 
   const [loading,      setLoading]      = useState(false)
   const [summary,      setSummary]      = useState(null)   // { invoices, totalSales, byMode, returnTotal, count }
+  const [byCategory,   setByCategory]   = useState({})
+  const [loadingCats,  setLoadingCats]  = useState(false)
   const [closing,      setClosing]      = useState(false)
   const [closeErr,     setCloseErr]     = useState('')
   const [closeErrRaw,  setCloseErrRaw]  = useState('')    // full traceback for copy
@@ -35,16 +37,30 @@ export default function SalesSummaryModal() {
     try {
       const data = await getTodayInvoiceSummary(posProfile, sessionStartDate, username)
       setSummary(data)
+      // Category breakdown — use only regular (non-return) POS invoices + credit invoices
+      // so negative return amounts don't pollute the category totals.
+      const posNames    = (data.invoices || []).filter((i) => !i.is_return).map((i) => i.name)
+      const creditNames = (data.creditInvoices || []).map((i) => i.name)
+      if (posNames.length > 0 || creditNames.length > 0) {
+        setLoadingCats(true)
+        getCategoryWiseSales(posNames, creditNames)
+          .then((cats) => setByCategory(cats))
+          .catch(() => setByCategory({}))
+          .finally(() => setLoadingCats(false))
+      } else {
+        setByCategory({})
+      }
     } catch (err) {
       console.error('Summary fetch failed:', err)
       setSummary({ invoices: [], totalSales: 0, byMode: {}, returnTotal: 0, count: 0 })
+      setByCategory({})
     } finally {
       setLoading(false)
     }
   }
 
   // ── Print summary ────────────────────────────────────────────────────────
-  function buildSummaryHtml(currentSummary) {
+  function buildSummaryHtml(currentSummary, currentByCategory) {
     const fmtN = (n) => parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     const company    = posProfileData?.company || 'POS'
     const dateStr    = new Date().toLocaleString()
@@ -101,26 +117,39 @@ export default function SalesSummaryModal() {
     <p class="sec">CASHIER SUMMARY</p>
     <table>
       <tr><td>Opening Cash</td><td style="text-align:right">${fmtN(openingCash)}</td></tr>
-      <tr><td>Day Cash Collected</td><td style="text-align:right">${fmtN(netCash)}</td></tr>
-      ${retTotal > 0 ? `<tr><td>Return / Exchange (setoff)</td><td style="text-align:right">${fmtN(retTotal)}</td></tr>` : ''}
+      ${retTotal > 0
+        ? `<tr><td>Cash Sales (Gross)</td><td style="text-align:right">${fmtN(netCash + retTotal)}</td></tr>
+           <tr><td>Returns / Refunds</td><td style="text-align:right">(${fmtN(retTotal)})</td></tr>
+           <tr><td>Net Cash Collected</td><td style="text-align:right">${fmtN(netCash)}</td></tr>`
+        : `<tr><td>Day Cash Collected</td><td style="text-align:right">${fmtN(netCash)}</td></tr>`}
       <tr class="tot"><td>Total Cash in Cashier</td><td style="text-align:right">${fmtN(openingCash + netCash)}</td></tr>
     </table>
+
+    ${Object.keys(currentByCategory || {}).length > 0 ? `
+    <div class="sep"></div>
+    <p class="sec">CATEGORY WISE SALES</p>
+    <table>
+      ${Object.entries(currentByCategory)
+        .sort(([, a], [, b]) => b - a)
+        .map(([g, a]) => `<tr><td>${g}</td><td style="text-align:right">${fmtN(a)}</td></tr>`)
+        .join('')}
+    </table>` : ''}
 
     <div class="sep"></div>
     <p class="c" style="margin-top:6px;font-size:10px">*** End of Report ***</p>
     </body></html>`
   }
 
-  async function printSummary(snapshotSummary) {
+  async function printSummary(snapshotSummary, snapshotCats) {
     try {
-      const html = buildSummaryHtml(snapshotSummary ?? summary)
+      const html = buildSummaryHtml(snapshotSummary ?? summary, snapshotCats ?? byCategory)
       if (window.electronAPI?.printReceipt) await window.electronAPI.printReceipt(html)
     } catch (e) {
       console.error('Summary print failed:', e)
     }
   }
 
-  function buildEmailHtml(currentSummary) {
+  function buildEmailHtml(currentSummary, currentByCategory) {
     const fmtN = (n) => parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     const company    = posProfileData?.company || 'POS'
     const dateStr    = new Date().toLocaleString()
@@ -166,11 +195,24 @@ export default function SalesSummaryModal() {
           <thead><tr style="background:#e8f0fe"><td colspan="2" style="padding:6px 8px;font-weight:bold">CASHIER SUMMARY</td></tr></thead>
           <tbody>
             <tr>${cell('Opening Cash')}${rcell(fmtN(openingCash))}</tr>
-            <tr>${cell('Day Cash Collected')}${rcell(fmtN(netCash))}</tr>
-            ${retTotal > 0 ? `<tr>${cell('Return / Exchange (setoff)')}${rcell(fmtN(retTotal), false, '#d97706')}</tr>` : ''}
+            ${retTotal > 0
+              ? `<tr>${cell('Cash Sales (Gross)')}${rcell(fmtN(netCash + retTotal))}</tr>
+                 <tr>${cell('Returns / Refunds')}${rcell('(' + fmtN(retTotal) + ')', false, '#dc2626')}</tr>
+                 <tr>${cell('Net Cash Collected')}${rcell(fmtN(netCash), false, '#16a34a')}</tr>`
+              : `<tr>${cell('Day Cash Collected')}${rcell(fmtN(netCash))}</tr>`}
             <tr style="font-size:14px">${cell('<strong>Total Cash in Cashier</strong>')}${rcell(fmtN(openingCash + netCash), true, '#b45309')}</tr>
           </tbody>
         </table>
+
+        ${Object.keys(currentByCategory || {}).length > 0 ? `
+        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+          <thead><tr style="background:#e8f0fe"><td colspan="2" style="padding:6px 8px;font-weight:bold">CATEGORY WISE SALES</td></tr></thead>
+          <tbody>
+            ${Object.entries(currentByCategory)
+              .sort(([, a], [, b]) => b - a)
+              .map(([g, a]) => `<tr>${cell(g)}${rcell(fmtN(a))}</tr>`).join('')}
+          </tbody>
+        </table>` : ''}
       </div>
       <p style="padding:8px 16px;margin:0;font-size:11px;color:#888">This report was generated automatically by ERPNext POS.</p>
     </body></html>`
@@ -184,7 +226,7 @@ export default function SalesSummaryModal() {
     try {
       const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
       const subject = `Sales Summary — ${posProfileData?.company || posProfile} — ${today}`
-      const html = buildEmailHtml(summary)
+      const html = buildEmailHtml(summary, byCategory)
       await sendSummaryEmail(toEmail, subject, html)
       setMailStatus('ok')
       setTimeout(() => setMailStatus(null), 4000)
@@ -214,7 +256,7 @@ export default function SalesSummaryModal() {
       clearPOSSession()
       setClosed(true)
       // Auto-print summary on session close — snapshot current data before it resets
-      printSummary(summary)
+      printSummary(summary, byCategory)
     } catch (err) {
       const data = err?.response?.data || {}
 
@@ -642,7 +684,7 @@ export default function SalesSummaryModal() {
                     </span>
                   </div>
 
-                  {/* Day Cash Collected */}
+                  {/* Day Cash Collected / Gross */}
                   <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-700/60">
                     <div className="flex items-center gap-2.5">
                       <div className="w-8 h-8 rounded-lg bg-green-600/20 flex items-center justify-center">
@@ -650,31 +692,35 @@ export default function SalesSummaryModal() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                         </svg>
                       </div>
-                      <p className="text-gray-300 text-sm font-medium">Day Cash Collected</p>
+                      <p className="text-gray-300 text-sm font-medium">
+                        {returnTotal > 0 ? 'Cash Sales (Gross)' : 'Day Cash Collected'}
+                      </p>
                     </div>
                     <span className="font-semibold tabular-nums">
                       {hasBreakdown
-                        ? <span className="text-green-400">{fmt(cashCollected)}</span>
+                        ? <span className="text-green-400">{fmt(returnTotal > 0 ? cashCollected + returnTotal : cashCollected)}</span>
                         : <span className="text-gray-600 text-sm">—</span>}
                     </span>
                   </div>
 
-                  {/* Return / Exchange offset — not real cash, setoff only */}
+                  {/* Return / Refund — shown as deduction when there are returns */}
                   {returnTotal > 0 && (
-                    <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700/40 bg-amber-900/10">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-amber-600/10 flex items-center justify-center">
-                          <svg className="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                          </svg>
+                    <>
+                      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700/40 bg-red-900/10">
+                        <div className="flex items-center gap-2.5 pl-4">
+                          <div className="w-2 h-2 rounded-full bg-red-400" />
+                          <span className="text-red-300 text-sm">Returns / Refunds</span>
                         </div>
-                        <div>
-                          <p className="text-amber-300 text-sm font-medium">Return / Exchange</p>
-                          <p className="text-gray-600 text-xs">Setoff — no cash movement</p>
-                        </div>
+                        <span className="text-red-400 font-semibold tabular-nums text-sm">({fmt(returnTotal)})</span>
                       </div>
-                      <span className="text-amber-400 font-semibold tabular-nums text-sm">{fmt(returnTotal)}</span>
-                    </div>
+                      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700/60">
+                        <div className="flex items-center gap-2.5 pl-4">
+                          <div className="w-2 h-2 rounded-full bg-green-400" />
+                          <span className="text-gray-300 text-sm">Net Cash Collected</span>
+                        </div>
+                        <span className="text-green-400 font-semibold tabular-nums text-sm">{fmt(cashCollected)}</span>
+                      </div>
+                    </>
                   )}
 
                   {/* Total Cash in Cashier — highlighted */}
@@ -689,6 +735,47 @@ export default function SalesSummaryModal() {
                     </div>
                     <span className="text-amber-300 font-bold text-xl tabular-nums">{fmt(totalInCashier)}</span>
                   </div>
+                </div>
+              </section>
+
+              {/* ══ CATEGORY WISE SALES ══ */}
+              <section>
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-1 h-5 rounded-full bg-teal-500" />
+                  <h3 className="text-white font-bold text-sm uppercase tracking-wider">Category Wise Sales</h3>
+                  {loadingCats && (
+                    <svg className="w-3.5 h-3.5 animate-spin text-gray-500 ml-1" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                    </svg>
+                  )}
+                </div>
+
+                <div className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden">
+                  {Object.keys(byCategory).length === 0 ? (
+                    <div className="px-5 py-5 text-center text-gray-500 text-sm">
+                      {loadingCats ? 'Loading…' : summary.count === 0 ? 'No sales today' : 'Category data unavailable'}
+                    </div>
+                  ) : (
+                    Object.entries(byCategory)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([group, amount], i, arr) => {
+                        const pct = summary.totalSales > 0 ? ((amount / summary.totalSales) * 100).toFixed(0) : 0
+                        return (
+                          <div
+                            key={group}
+                            className={`flex items-center justify-between px-5 py-3.5 ${i < arr.length - 1 ? 'border-b border-gray-700/40' : ''}`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-2 h-2 rounded-full bg-teal-500 flex-shrink-0" />
+                              <span className="text-gray-300 text-sm">{group}</span>
+                              <span className="text-gray-600 text-xs">{pct}%</span>
+                            </div>
+                            <span className="text-teal-400 font-semibold tabular-nums text-sm">{fmt(amount)}</span>
+                          </div>
+                        )
+                      })
+                  )}
                 </div>
               </section>
 
