@@ -508,6 +508,13 @@ export async function submitReturnInvoice(originalDoc, returnItems, posProfile, 
     }
   })
 
+  // Mirror the original invoice's payments with negative amounts (matches ERPNext web UI behaviour)
+  const payments = (originalDoc.payments || []).map((p) => ({
+    mode_of_payment: p.mode_of_payment,
+    amount:          -(Math.abs(p.amount) || 0),
+  }))
+  if (payments.length === 0) payments.push({ mode_of_payment: 'Cash', amount: 0 })
+
   const payload = {
     doctype:           'POS Invoice',
     is_return:         1,
@@ -520,7 +527,7 @@ export async function submitReturnInvoice(originalDoc, returnItems, posProfile, 
     set_warehouse:     originalDoc.set_warehouse,
     pos_opening_entry: posOpeningEntry,
     items,
-    payments:          [{ mode_of_payment: 'Cash', amount: 0 }],
+    payments,
   }
 
   const draft     = await request('POST', '/api/resource/POS Invoice', payload)
