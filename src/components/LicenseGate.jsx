@@ -287,7 +287,7 @@ export default function LicenseGate({ children }) {
   }
 
   // ── First-run welcome screen ──────────────────────────────────────────────
-  const [setupTab,       setSetupTab]       = useState('activate') // 'activate' | 'trial'
+  const [setupTab,       setSetupTab]       = useState('trial') // 'activate' | 'trial'
   const [trialLoading,   setTrialLoading]   = useState(false)
 
   async function handleStartTrial() {
@@ -408,18 +408,18 @@ export default function LicenseGate({ children }) {
           </div>
 
           {/* Tab switcher */}
-          <div className="flex bg-gray-800 rounded-xl p-1 mb-6 gap-1">
+          <div className="flex bg-gray-700 rounded-xl p-1 mb-6 gap-1">
             <button
               onClick={() => setSetupTab('activate')}
               className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors
-                ${setupTab === 'activate' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                ${setupTab === 'activate' ? 'bg-white text-gray-900' : 'text-gray-400 hover:text-white'}`}
             >
               Activate License
             </button>
             <button
               onClick={() => setSetupTab('trial')}
               className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors
-                ${setupTab === 'trial' ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                ${setupTab === 'trial' ? 'bg-white text-gray-900' : 'text-gray-400 hover:text-white'}`}
             >
               Start Free Trial
             </button>
