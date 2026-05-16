@@ -491,39 +491,39 @@ export async function getPOSInvoiceDetail(name) {
 // Create and submit a return POS Invoice against an original invoice.
 // returnItems: [{ item_code, item_name, qty (positive), rate, uom, warehouse }]
 // Returns the submitted doc name.
-// Uses ERPNext's own make_return_doc to get a properly linked return template,
-// then overwrites quantities with the user's selection before creating + submitting.
 export async function submitReturnInvoice(originalDoc, returnItems, posProfile, posOpeningEntry) {
   const today = new Date().toISOString().split('T')[0]
 
-  // Step 1: Ask ERPNext to generate a correctly linked return doc
-  const mapped = await request('GET',
-    '/api/method/erpnext.accounts.doctype.pos_invoice.pos_invoice.make_return_doc' +
-    qs({ source_name: originalDoc.name })
-  )
-  const returnDoc = mapped.message
+  // Build item rows: copy every field from the original item so ERPNext has all
+  // back-references it needs for return validation. Strip 'name' (child row docname)
+  // to avoid triggering an update instead of insert. Flip qty to negative.
+  const items = returnItems.map((originalItem) => {
+    // eslint-disable-next-line no-unused-vars
+    const { name: _childName, ...rest } = originalItem
+    return {
+      ...rest,
+      qty:                -Math.abs(originalItem.qty),
+      // sales_invoice_item links this return row to the original invoice row
+      sales_invoice_item: originalItem.name,
+    }
+  })
 
-  // Step 2: Apply the user's selected return quantities.
-  // returnItems keyed by item_code; items not selected get qty 0 (removed).
-  const qtyByCode = {}
-  for (const r of returnItems) {
-    qtyByCode[r.item_code] = (qtyByCode[r.item_code] || 0) + r.qty
+  const payload = {
+    doctype:           'POS Invoice',
+    is_return:         1,
+    return_against:    originalDoc.name,
+    pos_profile:       posProfile,
+    company:           originalDoc.company,
+    currency:          originalDoc.currency,
+    customer:          originalDoc.customer,
+    posting_date:      today,
+    set_warehouse:     originalDoc.set_warehouse,
+    pos_opening_entry: posOpeningEntry,
+    items,
+    payments:          [{ mode_of_payment: 'Cash', amount: 0 }],
   }
-  returnDoc.items = (returnDoc.items || [])
-    .map((row) => {
-      const userQty = qtyByCode[row.item_code]
-      if (!userQty) return null
-      return { ...row, qty: -Math.abs(userQty) }
-    })
-    .filter(Boolean)
 
-  // Step 3: Override session / date fields
-  returnDoc.pos_opening_entry = posOpeningEntry
-  returnDoc.posting_date      = today
-  returnDoc.payments          = [{ mode_of_payment: 'Cash', amount: 0 }]
-
-  // Step 4: Create draft then submit
-  const draft     = await request('POST', '/api/resource/POS Invoice', returnDoc)
+  const draft     = await request('POST', '/api/resource/POS Invoice', payload)
   const doc       = draft.data
   const submitted = await request('POST', '/api/method/frappe.client.submit', { doc })
   return submitted.message || submitted
