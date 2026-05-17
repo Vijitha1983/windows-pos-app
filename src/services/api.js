@@ -250,6 +250,31 @@ export async function getAvailableSerialNos(itemCode, warehouse) {
   return (data.data || []).map((s) => s.name)
 }
 
+// ─── Promotional Schemes ─────────────────────────────────────────────────────
+
+// Fetches all active selling promotional schemes with their slab child tables.
+// Returns full scheme docs so the caller can match item + qty locally without extra requests.
+export async function getPromotionalSchemes() {
+  const listData = await request('GET', '/api/resource/Promotional Scheme' + qs({
+    filters: JSON.stringify([['selling', '=', 1], ['disable', '=', 0]]),
+    fields:  JSON.stringify(['name']),
+    limit_page_length: 100,
+  }))
+  const names = (listData.data || []).map((s) => s.name)
+  if (names.length === 0) return []
+
+  const docs = await Promise.all(
+    names.map((name) =>
+      request('GET', `/api/resource/Promotional Scheme/${encodeURIComponent(name)}`)
+        .then((res) => res.data)
+        .catch((e) => { console.warn('[PROMO] failed to fetch scheme', name, e?.message); return null })
+    )
+  )
+  const result = docs.filter(Boolean)
+  console.log('[PROMO] fetched', result.length, 'schemes:', result.map(s => `${s.name}(${s.price_or_product_discount})`))
+  return result
+}
+
 // ─── POS Profiles ────────────────────────────────────────────────────────────
 
 export async function getPOSProfiles() {
@@ -466,9 +491,6 @@ export async function getPOSInvoiceDetail(name) {
 export async function submitReturnInvoice(originalDoc, returnItems, posProfile, posOpeningEntry) {
   const today = new Date().toISOString().split('T')[0]
 
-  // Build item rows with only business fields — strip child-table metadata
-  // (parent, parenttype, parentfield, doctype, name) so ERPNext doesn't
-  // confuse these rows with existing rows in the original invoice.
   const items = returnItems.map((originalItem) => ({
     item_code: originalItem.item_code,
     item_name: originalItem.item_name,
@@ -478,19 +500,15 @@ export async function submitReturnInvoice(originalDoc, returnItems, posProfile, 
     warehouse: originalItem.warehouse || originalDoc.set_warehouse,
     ...(originalItem.serial_no ? { serial_no: originalItem.serial_no } : {}),
     ...(originalItem.batch_no  ? { batch_no:  originalItem.batch_no  } : {}),
-    // sales_invoice_item intentionally omitted — it links to Sales Invoice Item
-    // (not POS Invoice Item) and causes a NoneType TypeError in ERPNext's validator
   }))
 
-  // return total (positive number — items have negative qty so we reverse)
   const returnTotal = returnItems.reduce((sum, i) => sum + Math.abs(i.qty) * (i.rate || 0), 0)
 
-  // Always record the return payment as Cash, regardless of original payment mode.
-  // For Exchange: the Cash return credit added in the new sale invoice (+returnTotal)
-  //   cancels this (-returnTotal), so Cash and original Koko Pay/Card are both correct.
-  // For Refund Only: the cashier gives physical cash back, so Cash is the right mode.
-  // Using the original mode (e.g. Koko Pay) would incorrectly deduct from Koko Pay
-  // in the day sales summary even though no Koko Pay was actually reversed.
+  // Always use Cash as the return payment mode for both refund and exchange.
+  // Refund:   Cr Cash 1,900 — cash physically left the drawer ✓
+  // Exchange: Cr Cash 1,900 — cancelled by the new sale invoice which posts
+  //           Dr Cash 1,900 as part of the return credit payment row, so the
+  //           net cash effect is zero for the return leg, correct for exchange.
   const payments = [{ mode_of_payment: 'Cash', amount: -returnTotal }]
 
   const payload = {
@@ -504,7 +522,7 @@ export async function submitReturnInvoice(originalDoc, returnItems, posProfile, 
     posting_date:      today,
     set_warehouse:     originalDoc.set_warehouse,
     pos_opening_entry: posOpeningEntry,
-    paid_amount:       -returnTotal,   // ERPNext skips computing this for returns
+    paid_amount:       -returnTotal,
     items,
     payments,
   }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { getItemGroups, getItems, getOpenPOSSession, getWarehouseStock } from '../services/api'
+import { getItemGroups, getItems, getOpenPOSSession, getWarehouseStock, getPromotionalSchemes } from '../services/api'
 import { signOut } from '../services/auth'
 import { cacheGet, cacheSet, cacheClear, cacheGetPersist, cacheSetPersist, cacheGetPersistStale, cacheClearPersist, getQueuedInvoices } from '../services/cache'
 import ItemGrid from './ItemGrid'
@@ -37,21 +37,24 @@ export default function POSMain() {
 
       const warehouse = store.posProfileData?.warehouse
 
-      // Fetch item groups, all items, and warehouse stock in parallel
-      const [groups, allData, stockMap] = await Promise.all([
+      // Fetch item groups, all items, warehouse stock, and promo schemes in parallel
+      const [groups, allData, stockMap, promos] = await Promise.all([
         getItemGroups(),
         fetchAllItems(),
         warehouse ? getWarehouseStock(warehouse) : Promise.resolve({}),
+        getPromotionalSchemes().catch(() => []),
       ])
       setSyncProgress(70)
 
       store.setItemGroups(groups)
       store.setItems(allData)
+      store.setPromoSchemes(promos)
 
       // Write all caches in parallel; also fetch the selected group if needed
       const cacheOps = [
         cacheSetPersist('itemGroups', groups),
         cacheSetPersist('items:All:', allData),
+        cacheSetPersist('promoSchemes', promos),
       ]
       if (warehouse && stockMap) cacheOps.push(cacheSetPersist(`stock:${warehouse}`, stockMap))
       if (store.selectedGroup !== 'All') {
@@ -101,18 +104,29 @@ export default function POSMain() {
     return () => clearInterval(id)
   }, [])
 
-  // Load item groups + pre-cache All items for offline use
+  // Load item groups + pre-cache All items + promo schemes for offline use
   useEffect(() => {
     async function load() {
       // Serve from disk immediately if available
-      const cachedGroups = await cacheGetPersist('itemGroups')
+      const [cachedGroups, cachedPromos] = await Promise.all([
+        cacheGetPersist('itemGroups'),
+        cacheGetPersist('promoSchemes'),
+      ])
       if (cachedGroups) store.setItemGroups(cachedGroups)
+      if (cachedPromos) store.setPromoSchemes(cachedPromos)
 
-      // Refresh from network in background (needed to keep cache warm)
+      // Refresh from network in background
       try {
-        const groups = await getItemGroups()
+        const [groups, promos] = await Promise.all([
+          getItemGroups(),
+          getPromotionalSchemes().catch(() => []),
+        ])
         store.setItemGroups(groups)
-        await cacheSetPersist('itemGroups', groups)
+        store.setPromoSchemes(promos)
+        await Promise.all([
+          cacheSetPersist('itemGroups', groups),
+          cacheSetPersist('promoSchemes', promos),
+        ])
 
         // Pre-cache All items so offline search always has data
         const existingItems = await cacheGetPersist('items:All:')
@@ -190,7 +204,7 @@ export default function POSMain() {
 
   useEffect(() => {
     const handler = (e) => {
-      if (store.itemDialog || store.paymentModal || store.showOpeningModal || store.showSummaryModal || settingsOpen) return
+      if (store.itemDialog || store.paymentModal || store.showOpeningModal || store.showSummaryModal || store.showReturnModal || settingsOpen) return
       const tag = document.activeElement?.tagName
       const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 
@@ -209,6 +223,9 @@ export default function POSMain() {
       } else if (e.key === 'F3') {
         e.preventDefault()
         store.holdBill()
+      } else if (e.key === 'F10') {
+        e.preventDefault()
+        store.setShowReturnModal(true)
       } else if (e.key === 'F12') {
         e.preventDefault()
         if (store.currentBill.items.length > 0) store.openPaymentModal()
@@ -227,7 +244,7 @@ export default function POSMain() {
     return () => window.removeEventListener('keydown', handler)
   }, [
     store.itemDialog, store.paymentModal,
-    store.showOpeningModal, store.showSummaryModal, settingsOpen,
+    store.showOpeningModal, store.showSummaryModal, store.showReturnModal, settingsOpen,
     store.currentBill.items.length, store.syncStatus,
   ])
 
@@ -338,6 +355,16 @@ export default function POSMain() {
                 : 'F2 Sync'}
             </span>
           </button>
+
+          {/* Promo schemes indicator */}
+          {store.promoSchemes?.length > 0 && (
+            <span
+              className="flex items-center gap-1 bg-amber-900/30 border border-amber-700/50 rounded px-2 py-0.5 text-xs text-amber-300"
+              title={store.promoSchemes.map(s => s.name).join(', ')}
+            >
+              🎁 {store.promoSchemes.length} promo{store.promoSchemes.length !== 1 ? 's' : ''}
+            </span>
+          )}
         </div>
 
         {/* Center */}
@@ -478,7 +505,7 @@ export default function POSMain() {
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                 </svg>
-                Return
+                Return <span className="opacity-40 font-mono font-normal">F10</span>
               </button>
               <span className="text-xs text-gray-500">{store.currentBill.items.length} items</span>
             </div>

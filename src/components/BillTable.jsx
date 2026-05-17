@@ -98,6 +98,7 @@ export default function BillTable() {
   }, [selectedRow, items, editingId])
 
   function startEdit(item) {
+    if (item.isFreePromo) return   // free promo qty is managed automatically
     setEditingId(item.id)
     setEditQty(String(item.qty))
   }
@@ -199,87 +200,116 @@ export default function BillTable() {
               </tr>
             </thead>
             <tbody>
-              {items.map((item, idx) => (
-                <tr
-                  key={item.id}
-                  onClick={() => setSelectedRow(idx)}
-                  className={`border-b border-gray-700/60 cursor-pointer transition-colors ${
-                    selectedRow === idx
-                      ? 'bg-blue-900/40 border-blue-700/50'
-                      : 'hover:bg-gray-700/30'
-                  }`}
-                >
-                  {/* # */}
-                  <td className="px-2 py-2.5 text-gray-500 text-xs">{idx + 1}</td>
+              {items.map((item, idx) => {
+                const isFree    = !!item.isFreePromo
+                const hasPromo  = !!item.promoApplied
+                const listPrice = item.basePrice ?? item.unitPrice
 
-                  {/* Item name + code + price level */}
-                  <td className="px-2 py-2.5 max-w-0">
-                    <div className="text-white font-medium text-xs leading-snug truncate">
-                      {item.item_name}
-                    </div>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-gray-500 text-xs">{item.item_code}</span>
-                      {item.priceLevel && item.priceLevel !== 'Standard' && (
-                        <span className="inline-block bg-blue-900/60 text-blue-300 text-xs px-1.5 py-0 rounded leading-4">
-                          {item.priceLevel}
-                        </span>
+                return (
+                  <tr
+                    key={item.id}
+                    onClick={() => setSelectedRow(idx)}
+                    className={`border-b border-gray-700/60 cursor-pointer transition-colors ${
+                      selectedRow === idx
+                        ? 'bg-blue-900/40 border-blue-700/50'
+                        : 'hover:bg-gray-700/30'
+                    }`}
+                  >
+                    {/* # */}
+                    <td className="px-2 py-2.5 text-gray-500 text-xs">{idx + 1}</td>
+
+                    {/* Item name + code + badges */}
+                    <td className="px-2 py-2.5 max-w-0">
+                      <div className="text-white font-medium text-xs leading-snug truncate">
+                        {item.item_name}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <span className="text-gray-500 text-xs">{item.item_code}</span>
+                        {item.priceLevel && item.priceLevel !== 'Standard' && !isFree && (
+                          <span className="inline-block bg-blue-900/60 text-blue-300 text-xs px-1.5 py-0 rounded leading-4">
+                            {item.priceLevel}
+                          </span>
+                        )}
+                        {isFree && (
+                          <span className="inline-block bg-green-800/60 text-green-300 text-xs px-1.5 py-0 rounded leading-4 font-semibold">
+                            FREE
+                          </span>
+                        )}
+                        {hasPromo && !isFree && (
+                          <span className="inline-block bg-amber-800/50 text-amber-300 text-xs px-1.5 py-0 rounded leading-4">
+                            PROMO
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Qty — click to edit; locked for free promo rows */}
+                    <td className="px-2 py-2.5 text-center">
+                      {editingId === item.id ? (
+                        <input
+                          ref={editRef}
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={editQty}
+                          onChange={(e) => setEditQty(e.target.value)}
+                          onBlur={() => commitEdit(item.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); commitEdit(item.id) }
+                            if (e.key === 'Escape') setEditingId(null)
+                          }}
+                          className="w-16 bg-gray-700 border-2 border-blue-500 rounded px-1.5 py-0.5 text-white text-center text-sm font-semibold focus:outline-none"
+                        />
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); startEdit(item) }}
+                          className={`w-16 py-0.5 rounded text-sm font-semibold transition-colors ${
+                            isFree
+                              ? 'text-green-400 cursor-default'
+                              : selectedRow === idx
+                                ? 'bg-blue-700/40 text-white hover:bg-blue-700/60'
+                                : 'text-white hover:bg-gray-600'
+                          }`}
+                        >
+                          {item.qty}
+                        </button>
                       )}
-                    </div>
-                  </td>
+                    </td>
 
-                  {/* Qty — click to edit */}
-                  <td className="px-2 py-2.5 text-center">
-                    {editingId === item.id ? (
-                      <input
-                        ref={editRef}
-                        type="number"
-                        min="0"
-                        step="1"
-                        value={editQty}
-                        onChange={(e) => setEditQty(e.target.value)}
-                        onBlur={() => commitEdit(item.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') { e.preventDefault(); commitEdit(item.id) }
-                          if (e.key === 'Escape') setEditingId(null)
-                        }}
-                        className="w-16 bg-gray-700 border-2 border-blue-500 rounded px-1.5 py-0.5 text-white text-center text-sm font-semibold focus:outline-none"
-                      />
-                    ) : (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); startEdit(item) }}
-                        className={`w-16 py-0.5 rounded text-sm font-semibold transition-colors ${
-                          selectedRow === idx
-                            ? 'bg-blue-700/40 text-white hover:bg-blue-700/60'
-                            : 'text-white hover:bg-gray-600'
-                        }`}
-                      >
-                        {item.qty}
-                      </button>
-                    )}
-                  </td>
+                    {/* Unit Price — show list price crossed out + promo price when discount applies */}
+                    <td className="px-2 py-2.5 text-right tabular-nums">
+                      {isFree ? (
+                        <span className="text-green-400 text-sm font-semibold">0.00</span>
+                      ) : hasPromo && listPrice > item.unitPrice ? (
+                        <div className="leading-tight">
+                          <div className="text-gray-500 text-[10px] line-through">{fmt(listPrice)}</div>
+                          <div className="text-amber-300 text-sm font-semibold">{fmt(item.unitPrice)}</div>
+                        </div>
+                      ) : (
+                        <span className="text-gray-200 text-sm">{fmt(item.unitPrice)}</span>
+                      )}
+                    </td>
 
-                  {/* Unit Price */}
-                  <td className="px-2 py-2.5 text-right text-gray-200 text-sm tabular-nums">
-                    {fmt(item.unitPrice)}
-                  </td>
+                    {/* Amount */}
+                    <td className="px-2 py-2.5 text-right font-bold text-white text-sm tabular-nums">
+                      {fmt(item.total)}
+                    </td>
 
-                  {/* Amount */}
-                  <td className="px-2 py-2.5 text-right font-bold text-white text-sm tabular-nums">
-                    {fmt(item.total)}
-                  </td>
-
-                  {/* Remove */}
-                  <td className="px-1.5 py-2.5 text-center">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); removeItem(item.id) }}
-                      title="Remove item (Del)"
-                      className="w-7 h-7 flex items-center justify-center rounded-lg bg-red-900/50 text-red-400 hover:bg-red-700 hover:text-white active:bg-red-800 transition-colors text-base font-bold leading-none"
-                    >
-                      ×
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                    {/* Remove — not shown for free promo rows (auto-managed by parent qty) */}
+                    <td className="px-1.5 py-2.5 text-center">
+                      {!isFree && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); removeItem(item.id) }}
+                          title="Remove item (Del)"
+                          className="w-7 h-7 flex items-center justify-center rounded-lg bg-red-900/50 text-red-400 hover:bg-red-700 hover:text-white active:bg-red-800 transition-colors text-base font-bold leading-none"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}

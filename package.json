@@ -1,11 +1,11 @@
 {
-  "name": "erpnext-pos",
-  "version": "1.3.6",
-  "description": "ERPNext POS Desktop Application",
+  "name": "orbis-pos",
+  "version": "1.3.7",
+  "description": "Orbis POS — Point of Sale by Infotop",
   "author": "Vijitha Rajapaksha",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "kill-port 5173 & concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev": "kill-port 5173 & set ELECTRON_RUN_AS_NODE=& concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "electron": "electron .",
     "make-icon": "node scripts/make-icon.js",
@@ -38,8 +38,8 @@
   },
   "build": {
     "appId": "com.hsp.erpnext.pos",
-    "productName": "ERPNext POS",
-    "copyright": "Copyright © 2025 Vijitha Rajapaksha",
+    "productName": "Orbis POS",
+    "copyright": "Copyright © 2025 Infotop",
     "asar": true,
     "files": [
       "dist/**/*",
@@ -70,7 +70,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ERPNext POS",
+      "shortcutName": "Orbis POS",
       "installerIcon": "public/icon.ico",
       "uninstallerIcon": "public/icon.ico",
       "deleteAppDataOnUninstall": true,

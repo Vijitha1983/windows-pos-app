@@ -331,7 +331,7 @@ export default function PaymentModal() {
     const items = currentBill.items.map((item) => {
       const entry = {
         item_code: item.item_code,
-        item_name: item.item_name,
+        item_name: (item.item_name || '').replace(/\s*\[FREE\]$/i, ''),
         qty:       item.qty,
         rate:      item.unitPrice,
         uom:       item.uom || 'Nos',
@@ -406,7 +406,7 @@ export default function PaymentModal() {
     const items = currentBill.items.map((item) => {
       const entry = {
         item_code: item.item_code,
-        item_name: item.item_name,
+        item_name: (item.item_name || '').replace(/\s*\[FREE\]$/i, ''),
         qty:       item.qty,
         rate:      item.unitPrice,
         uom:       item.uom || 'Nos',

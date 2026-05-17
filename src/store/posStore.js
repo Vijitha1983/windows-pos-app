@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { applyPromos } from '../services/promotions'
 
 const generateId = () => Math.random().toString(36).slice(2, 9)
 
@@ -49,6 +50,9 @@ export const usePOSStore = create((set, get) => ({
   sessionStartDate: null,  // period_start_date from the opening entry (datetime string)
   soldInSession: {},       // { item_code: total_qty_sold } — real-time local adjustment
 
+  // Promotional Schemes
+  promoSchemes: [],         // active ERPNext Promotional Scheme docs (fetched on login/sync)
+
   // Returns
   returnCredit: 0,          // credit amount from a pending return invoice
   returnInvoiceName: null,  // ERPNext name of the submitted return invoice
@@ -70,6 +74,24 @@ export const usePOSStore = create((set, get) => ({
   setErpnextUrl: (url) => set({ erpnextUrl: url }),
   setPosProfile: (p) => set({ posProfile: p }),
   setPosProfileData: (d) => set({ posProfileData: d }),
+  setPromoSchemes: (schemes) => {
+    const loaded = schemes || []
+    console.log('[PROMO] loaded', loaded.length, 'schemes')
+    set((state) => {
+      // Re-evaluate all existing bill items with the new schemes
+      let newItems = state.currentBill.items
+      if (loaded.length > 0) {
+        const mainItems = newItems.filter((i) => !i.isFreePromo)
+        for (const item of mainItems) {
+          newItems = applyPromos(newItems, item.id, loaded)
+        }
+      }
+      return {
+        promoSchemes: loaded,
+        currentBill: { ...state.currentBill, items: newItems },
+      }
+    })
+  },
   setTheme: (t) => {
     set({ theme: t })
     document.documentElement.classList.toggle('dark', t === 'dark')
@@ -96,39 +118,49 @@ export const usePOSStore = create((set, get) => ({
     const price = priceLevel ? priceLevel.our_price : (item.price_list_rate ?? item.standard_rate ?? 0)
     const levelName = priceLevel ? priceLevel.level : 'Standard'
     set((state) => {
+      const { promoSchemes } = state
       // Items with serial numbers are always separate rows (each unit is unique)
       const canMerge = !serialNo && !batchNo
       const existing = canMerge && state.currentBill.items.find(
-        (i) => i.item_code === item.item_code && i.priceLevel === levelName && !i.serial_no && !i.batch_no
+        (i) => i.item_code === item.item_code && i.priceLevel === levelName && !i.serial_no && !i.batch_no && !i.isFreePromo
       )
+
+      let newItems
+      let changedId
+
       if (existing) {
-        return {
-          currentBill: {
-            ...state.currentBill,
-            items: state.currentBill.items.map((i) =>
-              i === existing ? { ...i, qty: i.qty + qty, total: (i.qty + qty) * i.unitPrice } : i
-            ),
-          },
+        const newQty = existing.qty + qty
+        changedId = existing.id
+        newItems = state.currentBill.items.map((i) =>
+          i === existing ? { ...i, qty: newQty, total: newQty * (i.basePrice ?? i.unitPrice) } : i
+        )
+      } else {
+        const newItem = {
+          id: generateId(),
+          item_code:  item.item_code,
+          item_name:  item.item_name,
+          item_group: item.item_group || '',
+          qty,
+          unitPrice:  price,
+          basePrice:  price,   // always the original, never changed by promos
+          total:      qty * price,
+          priceLevel: levelName,
+          uom:        item.stock_uom || 'Nos',
+          serial_no:  serialNo || '',
+          batch_no:   batchNo  || '',
         }
+        changedId = newItem.id
+        newItems = [...state.currentBill.items, newItem]
       }
-      const newItem = {
-        id: generateId(),
-        item_code: item.item_code,
-        item_name: item.item_name,
-        qty,
-        unitPrice: price,
-        total: qty * price,
-        priceLevel: levelName,
-        uom: item.stock_uom || 'Nos',
-        serial_no: serialNo || '',
-        batch_no:  batchNo  || '',
+
+      if (promoSchemes.length > 0) {
+        newItems = applyPromos(newItems, changedId, promoSchemes)
       }
+
+      const changedIdx = newItems.findIndex((i) => i.id === changedId)
       return {
-        currentBill: {
-          ...state.currentBill,
-          items: [...state.currentBill.items, newItem],
-        },
-        selectedRow: state.currentBill.items.length,
+        currentBill: { ...state.currentBill, items: newItems },
+        selectedRow: changedIdx >= 0 ? changedIdx : newItems.length - 1,
       }
     })
   },
@@ -138,21 +170,25 @@ export const usePOSStore = create((set, get) => ({
       get().removeItem(id)
       return
     }
-    set((state) => ({
-      currentBill: {
-        ...state.currentBill,
-        items: state.currentBill.items.map((i) =>
-          i.id === id ? { ...i, qty, total: qty * i.unitPrice } : i
-        ),
-      },
-    }))
+    set((state) => {
+      const { promoSchemes } = state
+      // Use basePrice for total so promos can re-evaluate cleanly
+      let newItems = state.currentBill.items.map((i) =>
+        i.id === id ? { ...i, qty, total: qty * (i.basePrice ?? i.unitPrice) } : i
+      )
+      if (promoSchemes.length > 0) {
+        newItems = applyPromos(newItems, id, promoSchemes)
+      }
+      return { currentBill: { ...state.currentBill, items: newItems } }
+    })
   },
 
   removeItem: (id) => {
     set((state) => ({
       currentBill: {
         ...state.currentBill,
-        items: state.currentBill.items.filter((i) => i.id !== id),
+        // Also remove any free promo rows that were linked to this item
+        items: state.currentBill.items.filter((i) => i.id !== id && i.linkedToId !== id),
       },
     }))
   },

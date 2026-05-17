@@ -4,7 +4,7 @@ import { getPOSProfiles, getPOSProfile, getUserFullName, setBaseURL } from '../s
 import { usePOSStore } from '../store/posStore'
 
 export default function Login() {
-  const [url, setUrl] = useState('')
+  const [url, setUrl] = useState('https://')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [step, setStep] = useState('credentials') // 'credentials' | 'profile'
@@ -173,9 +173,9 @@ export default function Login() {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-white">
-            {companyName || 'Point of Sale'}
+            Orbis POS
           </h1>
-          <p className="text-gray-400 text-sm mt-1">Point of Sale Terminal</p>
+          <p className="text-gray-400 text-sm mt-1">{companyName || 'Point of Sale Terminal'}</p>
         </div>
 
         <div className="bg-gray-800 rounded-2xl shadow-2xl overflow-hidden">
@@ -186,7 +186,7 @@ export default function Login() {
               <div>
                 <label className="block text-sm text-gray-400 mb-1">ERPNext URL</label>
                 <input
-                  type="url"
+                  type="text"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://yoursite.erpnext.com"

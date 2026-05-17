@@ -3,7 +3,7 @@ import { getCustomers } from '../services/api'
 import { usePOSStore } from '../store/posStore'
 
 export default function CustomerSearch() {
-  const { currentBill, setCustomer } = usePOSStore()
+  const { currentBill, setCustomer, posProfileData } = usePOSStore()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
@@ -13,6 +13,7 @@ export default function CustomerSearch() {
   const debounce = useRef(null)
 
   const customer = currentBill.customer
+  const defaultCustomerName = posProfileData?.customer || 'Walk-in Customer'
 
   // F9 opens the customer search from anywhere on the POS screen
   useEffect(() => {
@@ -80,7 +81,7 @@ export default function CustomerSearch() {
           <span className="text-white flex-1 truncate">{customer.customer_name}</span>
         ) : (
           <span className="text-gray-400 flex-1">
-            Walk-in Customer
+            {defaultCustomerName}
             <span className="ml-2 text-gray-600 text-xs font-mono">F9</span>
           </span>
         )}
