@@ -1,5 +1,38 @@
 # Orbis POS — Changelog
 
+## [1.3.8] — 2026-05-17
+
+### New Features
+
+#### Tax Calculation on POS Invoices
+- POS invoices now correctly carry tax when submitted to ERPNext.
+- Three-tier tax resolution priority:
+  1. **Tax Rule lookup** — if the customer (or POS Profile) has a `tax_category`, the matching ERPNext Tax Rule is fetched and its Sales Tax Template applied.
+  2. **POS Profile taxes fallback** — if no Tax Rule matches, taxes configured directly on the POS Profile are used.
+  3. **Item Tax Template** — each invoice line carries `item_tax_template` fetched from the ERPNext Item Tax child table, enabling India GST item-level compliance.
+- `getApplicableTaxes(company, taxCategory)` added to `api.js` — queries Tax Rule doctype, fetches the resolved Sales Taxes and Charges Template.
+- `getItemTaxTemplates(itemCodes)` added to `api.js` — batch-fetches item-level tax templates for all items in the bill.
+- Tax resolution runs before invoice submission; offline queue fallback also includes taxes.
+
+#### Touch Mode — Function Buttons Always Active
+- The F-key toolbar (F1–F12) is now permanently visible at the bottom of the screen whenever Touch Mode is enabled, even when no input field is focused.
+- F1 (New Bill) now fires correctly from the virtual keyboard even when an input field has focus (removed `!inInput` guard).
+- F6 (Discount) now focuses the discount field even when triggered from the virtual keyboard while another input is active.
+- Main layout adds bottom padding (`pb-14`) in touch mode so the permanent F-key bar never overlaps content.
+- Virtual keyboard completely rewritten: permanent `FKeyBar` component renders at `z-[100]`; full keyboard at `z-[200]` when an input is focused.
+
+#### Customer Update Delivery System
+- New `npm run make-update` script — builds `app.asar` and packages it as a versioned zip (`Orbis-POS-Update-v{version}.zip`) ready to send to customers.
+- Customers receive a ~4 MB zip instead of an 80+ MB installer for every update.
+- Bundled `install-update.bat` auto-detects the installation location (user-level `%LOCALAPPDATA%` or machine-wide `%PROGRAMFILES%`), backs up the previous `app.asar`, and applies the update.
+- `UPDATE-DELIVERY.md` added to the project — full developer guide covering the build workflow, what app.asar covers, version bump checklist, customer rollback instructions, and when a full installer is required.
+
+### Improvements
+- `getCustomers` API call now fetches `tax_category` field so customer tax categories are available at checkout.
+- `updates/` folder added to `.gitignore` — built update packages are never accidentally committed.
+
+---
+
 ## [1.3.7] — 2026-05-17
 
 ### New Features

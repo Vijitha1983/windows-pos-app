@@ -232,7 +232,7 @@ export default function POSMain() {
       } else if (e.key === '+' || e.key === 'Add') {
         e.preventDefault()
         if (store.currentBill.items.length > 0) store.openPaymentModal()
-      } else if (e.key === 'F1' && !inInput) {
+      } else if (e.key === 'F1') {
         e.preventDefault()
         store.newBill()
       } else if (e.key === 'F4') {
@@ -272,7 +272,7 @@ export default function POSMain() {
   }, [])
 
   return (
-    <div className="flex flex-col h-screen bg-gray-900 text-white select-none">
+    <div className={`flex flex-col h-screen bg-gray-900 text-white select-none${store.touchMode ? ' pb-14' : ''}`}>
 
       {/* ── Titlebar ─────────────────────────────────────────────────── */}
       <div

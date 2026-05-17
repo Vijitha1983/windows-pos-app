@@ -275,6 +275,60 @@ export async function getPromotionalSchemes() {
   return result
 }
 
+// ─── Item Tax Templates ───────────────────────────────────────────────────────
+
+// Batch-fetches item_tax_template for a list of item codes from ERPNext's
+// Item Tax child table. Returns a map of { item_code: item_tax_template }.
+// Prefers rows with no tax_category set (applies to all customers).
+export async function getItemTaxTemplates(itemCodes) {
+  if (!itemCodes?.length) return {}
+  try {
+    const data = await request('GET', '/api/resource/Item Tax' + qs({
+      filters:           JSON.stringify([['parent', 'in', itemCodes]]),
+      fields:            JSON.stringify(['parent', 'item_tax_template', 'tax_category', 'valid_from']),
+      limit_page_length: itemCodes.length * 5,
+    }))
+    const map = {}
+    for (const row of (data.data || [])) {
+      // Prefer rows with no tax_category (universal) over category-specific ones
+      if (!map[row.parent] || !row.tax_category) {
+        map[row.parent] = row.item_tax_template
+      }
+    }
+    return map
+  } catch {
+    return {}
+  }
+}
+
+// ─── Tax Rules ───────────────────────────────────────────────────────────────
+
+// Resolves the applicable Sales Taxes and Charges Template via Tax Rule
+// (matching tax_category + company + selling=1), then returns the template
+// name and its tax rows. Returns null when no matching rule is found.
+export async function getApplicableTaxes(company, taxCategory) {
+  if (!taxCategory || !company) return null
+  try {
+    const rules = await request('GET', '/api/resource/Tax Rule' + qs({
+      filters: JSON.stringify([
+        ['company',      '=', company],
+        ['tax_category', '=', taxCategory],
+        ['selling',      '=', 1],
+      ]),
+      fields:            JSON.stringify(['name', 'sales_tax_template']),
+      limit_page_length: 5,
+      order_by:          'priority desc',
+    }))
+    const template = (rules.data || []).find((r) => r.sales_tax_template)?.sales_tax_template
+    if (!template) return null
+    const tmpl = await request('GET', `/api/resource/Sales Taxes and Charges Template/${encodeURIComponent(template)}`)
+    return { taxes_and_charges: template, taxes: tmpl.data?.taxes || [] }
+  } catch (e) {
+    console.warn('[TAX] Tax Rule lookup failed:', e?.message)
+    return null
+  }
+}
+
 // ─── POS Profiles ────────────────────────────────────────────────────────────
 
 export async function getPOSProfiles() {
@@ -380,7 +434,7 @@ export async function getCustomers(search = '') {
   if (search) filters.push(['customer_name', 'like', `%${search}%`])
 
   const params = {
-    fields: JSON.stringify(['name', 'customer_name', 'mobile_no']),
+    fields: JSON.stringify(['name', 'customer_name', 'mobile_no', 'tax_category']),
     filters: JSON.stringify(filters),
     limit_page_length: 20,
     order_by: 'customer_name asc',

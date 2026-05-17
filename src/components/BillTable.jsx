@@ -69,7 +69,7 @@ export default function BillTable() {
     const handler = (e) => {
       if (editingId) return
       const tag = document.activeElement?.tagName
-      if (tag === 'INPUT' || tag === 'SELECT') return
+      if ((tag === 'INPUT' || tag === 'SELECT') && e.key !== 'F6') return
 
       if (e.key === 'ArrowUp') {
         e.preventDefault()

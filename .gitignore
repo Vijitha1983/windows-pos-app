@@ -33,3 +33,6 @@ Thumbs.db
 
 # electron-store persisted data (contains session cookies — never commit)
 app-data/
+
+# update packages (built artefacts — don't commit)
+updates/

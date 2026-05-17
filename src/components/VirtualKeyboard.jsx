@@ -23,20 +23,18 @@ const NUMPAD_ONLY = [
   ['CLEAR','DONE'],
 ]
 
-// Function keys with short labels for cashiers
+// Function key bar — always visible in touch mode
 const FKEY_ROW = [
-  { key: 'F1',  label: 'New',     title: 'F1 – New Bill' },
-  { key: 'F2',  label: 'Sync',    title: 'F2 – Sync / Reload' },
-  { key: 'F3',  label: 'Hold',    title: 'F3 – Hold Bill' },
-  { key: 'F4',  label: 'New',     title: 'F4 – New Bill' },
-  { key: 'F5',  label: 'Summary', title: 'F5 – Sales Summary' },
-  { key: 'F6',  label: 'F6',      title: 'F6' },
-  { key: 'F7',  label: 'Ret/WS',  title: 'F7 – Toggle Retail / Wholesale' },
-  { key: 'F8',  label: 'Cash/Cr', title: 'F8 – Toggle Cash / Credit' },
-  { key: 'F9',  label: 'F9',      title: 'F9' },
-  { key: 'F10', label: 'F10',     title: 'F10' },
-  { key: 'F11', label: 'F11',     title: 'F11' },
-  { key: 'F12', label: 'PAY ✓',   title: 'F12 – Payment / Checkout' },
+  { key: 'F1',  label: 'New Bill',  title: 'F1 – New Bill' },
+  { key: 'F2',  label: 'Sync',      title: 'F2 – Sync / Reload' },
+  { key: 'F3',  label: 'Hold',      title: 'F3 – Hold Bill' },
+  { key: 'F5',  label: 'Summary',   title: 'F5 – Sales Summary' },
+  { key: 'F6',  label: 'Discount',  title: 'F6 – Focus Discount' },
+  { key: 'F7',  label: 'Ret/WS',    title: 'F7 – Toggle Retail / Wholesale' },
+  { key: 'F8',  label: 'Cash/Cr',   title: 'F8 – Toggle Cash / Credit' },
+  { key: 'F9',  label: 'Customer',  title: 'F9 – Customer Search' },
+  { key: 'F10', label: 'Return',    title: 'F10 – Return / Exchange' },
+  { key: 'F12', label: 'PAY ✓',     title: 'F12 – Payment / Checkout' },
 ]
 
 function setNativeValue(el, value) {
@@ -47,7 +45,6 @@ function setNativeValue(el, value) {
 }
 
 function dispatchFKey(key) {
-  // Dispatch to window so POSMain / BillTable keyboard handlers catch it
   window.dispatchEvent(new KeyboardEvent('keydown', {
     key,
     code: key,
@@ -122,14 +119,29 @@ export default function VirtualKeyboard() {
     }
   }
 
-  if (!touchMode || !visible) return null
+  // Touch mode OFF → render nothing
+  if (!touchMode) return null
 
-  // ── Number-only input: compact centred numpad ──────────────────
+  // Touch mode ON, no input focused → show only the permanent F-key bar
+  if (!visible) {
+    return (
+      <div
+        className="fixed bottom-0 left-0 right-0 z-[100] bg-gray-900 border-t-2 border-purple-700 shadow-xl select-none"
+        onMouseDown={(e) => e.preventDefault()}
+        onPointerDown={(e) => e.preventDefault()}
+      >
+        <FKeyBar />
+      </div>
+    )
+  }
+
+  // Touch mode ON, input focused → show full keyboard (F-key bar at top)
+
+  // Number-only input: compact centred numpad
   if (isNum) {
     return (
       <KeyboardShell onHide={() => setVisible(false)}>
-        {/* F-key row */}
-        <FKeyRow />
+        <FKeyBar />
         <div className="max-w-[300px] mx-auto py-2 px-3 space-y-1.5">
           {NUMPAD_ONLY.map((row, ri) => (
             <div key={ri} className="flex gap-1.5">
@@ -141,37 +153,30 @@ export default function VirtualKeyboard() {
               ))}
             </div>
           ))}
-          {/* + / - shortcuts */}
           <div className="flex gap-1.5">
             <button
               onPointerDown={(e) => { e.preventDefault(); dispatchFKey('+') }}
               title="+ → Payment / Checkout"
               className="flex-1 py-2.5 rounded-xl bg-green-700 hover:bg-green-600 text-white font-bold text-base transition-colors active:scale-95"
-            >
-              +
-            </button>
+            >+</button>
             <button
               onPointerDown={(e) => { e.preventDefault(); dispatchFKey('-') }}
               title="− → Recall saved bill"
               className="flex-1 py-2.5 rounded-xl bg-yellow-700 hover:bg-yellow-600 text-white font-bold text-base transition-colors active:scale-95"
-            >
-              −
-            </button>
+            >−</button>
           </div>
         </div>
       </KeyboardShell>
     )
   }
 
-  // ── Text input: QWERTY left + Numpad right ─────────────────────
+  // Text input: QWERTY left + Numpad right
   return (
     <KeyboardShell onHide={() => setVisible(false)}>
-      {/* F-key row */}
-      <FKeyRow />
-
+      <FKeyBar />
       <div className="flex gap-2 px-3 py-2">
 
-        {/* ── QWERTY section ── */}
+        {/* QWERTY section */}
         <div className="flex-1 space-y-1.5">
           {QWERTY_ROWS.map((row, ri) => (
             <div key={ri} className="flex gap-1 justify-start">
@@ -198,7 +203,7 @@ export default function VirtualKeyboard() {
           ))}
         </div>
 
-        {/* ── Numpad section (right side) ── */}
+        {/* Numpad section (right side) */}
         <div className="flex flex-col gap-1.5 border-l border-gray-700 pl-2">
           {NUMPAD_ROWS.map((row, ri) => (
             <div key={ri} className="flex gap-1.5">
@@ -210,28 +215,21 @@ export default function VirtualKeyboard() {
               ))}
             </div>
           ))}
-          {/* + / - action keys + Clear */}
           <div className="flex gap-1.5">
             <button
               onPointerDown={(e) => { e.preventDefault(); dispatchFKey('+') }}
               title="+ → Payment / Checkout"
               className="flex-1 py-2.5 rounded-xl bg-green-700 hover:bg-green-600 text-white font-bold text-base transition-colors active:scale-95"
-            >
-              +
-            </button>
+            >+</button>
             <button
               onPointerDown={(e) => { e.preventDefault(); dispatchFKey('-') }}
               title="− → Recall saved bill"
               className="flex-1 py-2.5 rounded-xl bg-yellow-700 hover:bg-yellow-600 text-white font-bold text-base transition-colors active:scale-95"
-            >
-              −
-            </button>
+            >−</button>
             <button
               onPointerDown={(e) => { e.preventDefault(); sendKey('CLEAR') }}
               className="flex-1 py-2.5 rounded-xl bg-red-900/60 hover:bg-red-800 text-red-300 font-bold text-xs transition-colors active:scale-95"
-            >
-              Clear
-            </button>
+            >Clear</button>
           </div>
         </div>
 
@@ -240,19 +238,21 @@ export default function VirtualKeyboard() {
   )
 }
 
-// ── F-key row (dispatches real keyboard events) ─────────────────
-function FKeyRow() {
+// ── Permanent F-key bar (always visible in touch mode) ────────────
+function FKeyBar() {
   return (
-    <div className="flex gap-1 px-3 pt-2 pb-1 border-b border-gray-700/60 overflow-x-auto">
+    <div className="flex gap-1 px-3 py-2 overflow-x-auto">
       {FKEY_ROW.map(({ key, label, title }) => {
-        const isAction = ['F2','F3','F5','F7','F8'].includes(key)
         const isPay    = key === 'F12'
-        const isNew    = key === 'F1' || key === 'F4'
-        const base = 'flex-shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors active:scale-95 select-none'
-        const color = isPay    ? 'bg-green-700 hover:bg-green-600 text-white'
-                    : isNew    ? 'bg-blue-800 hover:bg-blue-700 text-white'
-                    : isAction ? 'bg-purple-800 hover:bg-purple-700 text-purple-100'
-                    :            'bg-gray-700 hover:bg-gray-600 text-gray-300'
+        const isNew    = key === 'F1'
+        const isAction = ['F2','F3','F5','F7','F8'].includes(key)
+        const isOrange = ['F9','F10'].includes(key)
+        const base = 'flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors active:scale-95 select-none'
+        const color = isPay     ? 'bg-green-700 hover:bg-green-600 text-white'
+                    : isNew     ? 'bg-blue-800 hover:bg-blue-700 text-white'
+                    : isOrange  ? 'bg-orange-700 hover:bg-orange-600 text-white'
+                    : isAction  ? 'bg-purple-800 hover:bg-purple-700 text-purple-100'
+                    :             'bg-gray-700 hover:bg-gray-600 text-gray-300'
         return (
           <button
             key={key}
@@ -261,7 +261,7 @@ function FKeyRow() {
             className={`${base} ${color}`}
           >
             <span className="block text-[9px] opacity-60 leading-none mb-0.5">{key}</span>
-            <span className="block leading-none">{label}</span>
+            <span className="block leading-none whitespace-nowrap">{label}</span>
           </button>
         )
       })}
@@ -269,7 +269,7 @@ function FKeyRow() {
   )
 }
 
-// ── Shell wrapper ───────────────────────────────────────────────
+// ── Shell wrapper for full keyboard ──────────────────────────────
 function KeyboardShell({ children, onHide }) {
   return (
     <div
@@ -305,15 +305,15 @@ function Key({ label, onPress, variant = 'letter', size }) {
   const base = 'transition-colors active:scale-95 font-semibold rounded-xl'
 
   const styles = {
-    letter:   'flex-1 min-w-[30px] py-3 bg-gray-700 hover:bg-blue-600 active:bg-blue-700 text-white text-sm',
-    num:      `${size === 'numpad' ? 'w-[58px]' : 'flex-1'} py-3 bg-gray-600 hover:bg-blue-600 active:bg-blue-700 text-white text-lg font-bold`,
-    done:     'flex-1 py-3 bg-green-600 hover:bg-green-500 active:bg-green-700 text-white text-sm',
-    back:     'py-3 px-3 min-w-[44px] bg-red-800 hover:bg-red-700 active:bg-red-900 text-white text-lg',
-    clear:    'flex-1 py-3 bg-red-900/60 hover:bg-red-800 text-red-300 text-xs',
-    shift:    'py-3 px-3 min-w-[44px] bg-gray-600 hover:bg-gray-500 text-white text-sm',
+    letter:    'flex-1 min-w-[30px] py-3 bg-gray-700 hover:bg-blue-600 active:bg-blue-700 text-white text-sm',
+    num:       `${size === 'numpad' ? 'w-[58px]' : 'flex-1'} py-3 bg-gray-600 hover:bg-blue-600 active:bg-blue-700 text-white text-lg font-bold`,
+    done:      'flex-1 py-3 bg-green-600 hover:bg-green-500 active:bg-green-700 text-white text-sm',
+    back:      'py-3 px-3 min-w-[44px] bg-red-800 hover:bg-red-700 active:bg-red-900 text-white text-lg',
+    clear:     'flex-1 py-3 bg-red-900/60 hover:bg-red-800 text-red-300 text-xs',
+    shift:     'py-3 px-3 min-w-[44px] bg-gray-600 hover:bg-gray-500 text-white text-sm',
     'shift-on':'py-3 px-3 min-w-[44px] bg-blue-600 hover:bg-blue-500 text-white text-sm',
-    space:    'flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white text-sm',
-    special:  'py-3 px-3 min-w-[36px] bg-gray-600 hover:bg-blue-600 text-white text-sm',
+    space:     'flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white text-sm',
+    special:   'py-3 px-3 min-w-[36px] bg-gray-600 hover:bg-blue-600 text-white text-sm',
   }
 
   return (

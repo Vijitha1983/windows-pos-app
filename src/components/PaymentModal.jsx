@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { createPOSInvoice, submitPOSInvoice, createSalesInvoice, submitSalesInvoice, resolveGiftCardAccount, validateGiftVoucherSerial, searchDeliveredSerialNos } from '../services/api'
+import { createPOSInvoice, submitPOSInvoice, createSalesInvoice, submitSalesInvoice, resolveGiftCardAccount, validateGiftVoucherSerial, searchDeliveredSerialNos, getApplicableTaxes, getItemTaxTemplates } from '../services/api'
 import { queueInvoice } from '../services/cache'
 
 export default function PaymentModal() {
@@ -322,7 +322,7 @@ export default function PaymentModal() {
   }
 
   // ── Build ERPNext invoice payload ────────────────────────────────────────
-  function buildInvoice(changeAmt = 0) {
+  function buildInvoice(changeAmt = 0, taxInfo = null, itemTaxMap = {}) {
     const today     = new Date().toISOString().split('T')[0]
     const warehouse = posProfileData?.warehouse || ''
     // Use POS Profile's default customer so "Walk-in Customer" resolves correctly
@@ -339,6 +339,9 @@ export default function PaymentModal() {
       }
       if (item.serial_no) entry.serial_no = item.serial_no
       if (item.batch_no)  entry.batch_no  = item.batch_no
+      // Item-level tax template (India GST / per-item tax compliance)
+      const itemTpl = itemTaxMap?.[item.item_code]
+      if (itemTpl) entry.item_tax_template = itemTpl
       return entry
     })
 
@@ -395,11 +398,24 @@ export default function PaymentModal() {
       doc.discount_amount   = discountAmt
     }
 
+    // Apply taxes — from Tax Rule (tax_category) or POS Profile fallback
+    if (taxInfo?.taxes_and_charges) doc.taxes_and_charges = taxInfo.taxes_and_charges
+    if (taxInfo?.taxes?.length > 0) {
+      doc.taxes = taxInfo.taxes.map((t) => ({
+        charge_type:            t.charge_type,
+        account_head:           t.account_head,
+        description:            t.description || t.account_head,
+        rate:                   t.rate || 0,
+        included_in_print_rate: t.included_in_print_rate || 0,
+        cost_center:            t.cost_center || '',
+      }))
+    }
+
     return doc
   }
 
   // ── Build Sales Invoice payload for credit sales ─────────────────────────
-  function buildCreditInvoice() {
+  function buildCreditInvoice(taxInfo = null, itemTaxMap = {}) {
     const today     = new Date().toISOString().split('T')[0]
     const warehouse = posProfileData?.warehouse || ''
 
@@ -414,6 +430,9 @@ export default function PaymentModal() {
       }
       if (item.serial_no) entry.serial_no = item.serial_no
       if (item.batch_no)  entry.batch_no  = item.batch_no
+      // Item-level tax template (India GST / per-item tax compliance)
+      const itemTpl = itemTaxMap?.[item.item_code]
+      if (itemTpl) entry.item_tax_template = itemTpl
       return entry
     })
 
@@ -431,6 +450,19 @@ export default function PaymentModal() {
     if (discountAmt > 0) {
       doc.apply_discount_on = 'Grand Total'
       doc.discount_amount   = discountAmt
+    }
+
+    // Apply taxes — from Tax Rule (tax_category) or POS Profile fallback
+    if (taxInfo?.taxes_and_charges) doc.taxes_and_charges = taxInfo.taxes_and_charges
+    if (taxInfo?.taxes?.length > 0) {
+      doc.taxes = taxInfo.taxes.map((t) => ({
+        charge_type:            t.charge_type,
+        account_head:           t.account_head,
+        description:            t.description || t.account_head,
+        rate:                   t.rate || 0,
+        included_in_print_rate: t.included_in_print_rate || 0,
+        cost_center:            t.cost_center || '',
+      }))
     }
 
     return doc
@@ -556,11 +588,33 @@ export default function PaymentModal() {
     setSubmitting(true)
     setError('')
 
+    // Resolve applicable taxes before try so catch block can access both vars
+    const company     = posProfileData?.company || ''
+    const taxCategory = currentBill.customer?.tax_category || posProfileData?.tax_category || ''
+    let taxInfo    = null
+    let itemTaxMap = {}
     try {
+      const uniqueCodes = [...new Set(currentBill.items.map((i) => i.item_code))]
+      const [resolvedTax, resolvedItemTax] = await Promise.all([
+        taxCategory ? getApplicableTaxes(company, taxCategory) : Promise.resolve(null),
+        getItemTaxTemplates(uniqueCodes),
+      ])
+      taxInfo    = resolvedTax
+      itemTaxMap = resolvedItemTax || {}
+    } catch { /* ignore — fallback below */ }
+    if (!taxInfo) {
+      const profileTaxes = posProfileData?.taxes || []
+      if (profileTaxes.length > 0 || posProfileData?.taxes_and_charges) {
+        taxInfo = { taxes_and_charges: posProfileData?.taxes_and_charges || '', taxes: profileTaxes }
+      }
+    }
+
+    try {
+
       if (paymentType === 'credit') {
         // ── Credit sale → Sales Invoice (creates customer receivable, no payment needed)
         if (!isOnline) throw new Error('Credit sales require an internet connection')
-        const invoiceData = buildCreditInvoice()
+        const invoiceData = buildCreditInvoice(taxInfo, itemTaxMap)
         const draft = await createSalesInvoice(invoiceData)
         if (!draft?.name) throw new Error('Sales Invoice created but no name returned')
         // Pass full draft doc — avoids an extra GET round-trip before submit
@@ -570,7 +624,7 @@ export default function PaymentModal() {
       } else {
         // ── Cash / Card sale → POS Invoice
         const changeAmt   = change
-        const invoiceData = buildInvoice(changeAmt)
+        const invoiceData = buildInvoice(changeAmt, taxInfo, itemTaxMap)
         if (!isOnline) throw new Error('offline')
         const draft = await createPOSInvoice(invoiceData)
         if (!draft?.name) throw new Error('Invoice created but no name returned')
@@ -582,7 +636,7 @@ export default function PaymentModal() {
       }
     } catch (err) {
       if (paymentType === 'cash' && (!isOnline || err.message === 'offline')) {
-        const invoiceData = buildInvoice(change)
+        const invoiceData = buildInvoice(change, taxInfo, itemTaxMap)
         await queueInvoice(invoiceData)
         kickCashDrawer()
         finishCheckout(change)
