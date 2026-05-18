@@ -1,10 +1,117 @@
-# ERPNext POS — Release Notes
+# Orbis POS — Release Notes
 
-**Product:** ERPNext POS — Windows Desktop Application
+**Product:** Orbis POS — Windows Desktop Application
 **Platform:** Windows 10 / 11 (x64)
 **ERPNext Compatibility:** v14, v15
-**Developer:** Vijitha Rajapaksha
-**Copyright:** © 2025 Vijitha Rajapaksha. All rights reserved.
+**Developer:** Infotop
+**Copyright:** © 2025 Infotop. All rights reserved.
+
+---
+
+## v1.3.8 — 2026-05-18
+
+### Overview
+
+Version 1.3.8 delivers automatic tax calculation on POS invoices, full touch-mode keyboard support, and a lightweight customer update delivery system.
+
+---
+
+### New Features
+
+#### Automatic Tax Calculation on POS Invoices
+
+POS invoices submitted to ERPNext now carry the correct tax automatically — no manual tax entry required at the counter.
+
+Tax is resolved in priority order:
+
+1. **Tax Rule lookup** — if the customer or POS Profile has a `tax_category`, the app queries ERPNext's Tax Rule doctype to find the matching Sales Tax Template and injects all tax rows into the invoice.
+2. **POS Profile taxes fallback** — if no Tax Rule matches, taxes configured directly on the POS Profile (`taxes` child table and `taxes_and_charges` template) are used.
+3. **Item Tax Template** — each invoice line carries its `item_tax_template` (fetched from ERPNext's Item Tax child table), enabling item-level GST compliance for India and similar multi-rate regimes.
+
+Tax resolution runs before invoice submission; the offline queue fallback also carries taxes so queued invoices are not submitted without tax when connectivity is restored.
+
+**ERPNext setup:** Go to **Accounts → Tax Rule → New**, set Selling = Yes, Company, Tax Category, and Sales Tax Template. Assign the same `tax_category` to customers or the POS Profile.
+
+#### Touch Mode — All Function Buttons Always Active
+
+All F-key shortcuts are now fully accessible when using Orbis POS on a touchscreen or tablet without a physical keyboard.
+
+- The **F-key toolbar** (F1 New Bill, F2 Sync, F3 Hold, F5 Summary, F6 Discount, F7 Retail/WS, F8 Cash/Cr, F9 Customer, F10 Return, F12 PAY) is **permanently pinned to the bottom of the screen** whenever Touch Mode is enabled — even when no input field is focused.
+- All function buttons dispatch keyboard events identical to physical key presses — every feature reachable by keyboard is reachable by touch.
+- F1, F6 and other shortcuts now fire correctly from the virtual keyboard even when an input field has focus (previous guard removed).
+- The main layout adds bottom padding in touch mode so the F-key bar never overlaps bill content.
+
+#### Customer Update Delivery System
+
+Sending updates to installed customers no longer requires distributing a full 80 MB installer.
+
+- **`npm run make-update`** — new developer script that builds the app, packs it into `app.asar`, and creates a versioned zip (`Orbis-POS-Update-v{version}.zip`, typically 3–5 MB).
+- The zip contains `app.asar` (all app code) and `install-update.bat`.
+- `install-update.bat` auto-detects the installation location (user-level `%LOCALAPPDATA%` or machine-wide `%PROGRAMFILES%`), kills the running app, backs up the previous `app.asar` as `.bak`, and applies the update in seconds.
+- `UPDATE-DELIVERY.md` added to the project — full developer guide covering build workflow, rollback instructions, and when a full installer is required vs. an app.asar update.
+
+---
+
+### Improvements
+
+- `getCustomers` API call now fetches `tax_category` so customer tax categories are available at checkout without an extra round-trip.
+- `updates/` folder added to `.gitignore` — built update packages are never accidentally committed.
+
+---
+
+### Bug Fixes
+
+- Virtual keyboard F-key bar was only visible when an input field was focused — now always shown in touch mode.
+- F1 (New Bill) was blocked when a text input had focus in touch mode — fixed.
+- F6 (Discount) was blocked when a text input had focus in touch mode — fixed.
+
+---
+
+## v1.3.7 — 2026-05-17
+
+### Overview
+
+Version 1.3.7 is a major feature release introducing automatic promotional scheme application, a Return/Exchange shortcut, and a complete rebrand to **Orbis POS by Infotop**.
+
+---
+
+### New Features
+
+#### Promotional Schemes (Auto-Apply from ERPNext)
+
+Active ERPNext Promotional Schemes are fetched on login and F2 Sync, cached to disk for offline use, and applied automatically as items are added to the bill.
+
+- **Price Discount** — when item quantity reaches a configured slab threshold, the unit price is automatically updated to the promotional rate. The original list price is shown crossed-out in amber; a `PROMO` badge appears alongside the promotional price.
+- **Product Discount (Free Item)** — when item quantity reaches a slab threshold, a free item row is inserted below the parent item automatically. Supports `same_item=1` (a free unit of the same purchased item) and separate free item codes configured in ERPNext.
+- Free item rows show a `FREE` badge, zero price, and are locked — they cannot be manually edited or removed independently.
+- Removing a parent item automatically removes its linked free row.
+- Schemes are matched per item code or item group as configured in ERPNext (`items` child table). An empty items table means the scheme applies to all items.
+- A header badge shows the count of active promo schemes with scheme names on hover.
+- Promo schemes are cached to disk on sync and restored on startup for reliable offline use.
+- Free items are submitted to ERPNext with `qty` and `rate: 0` so stock is correctly deducted.
+- Price-promotional unit price is sent as the invoice line `rate` — the promotional price becomes the official unit price in ERPNext.
+
+**ERPNext setup:** Go to **Accounts → Promotional Scheme → New**. Configure Price Discount or Product Discount slabs. Add item codes or item groups in the Items child table (leave empty for all items).
+
+#### Keyboard Shortcut — F10 Return / Exchange
+
+- `F10` opens the Return / Exchange modal from anywhere in the POS.
+- The Return button in the bill header displays an `F10` hint label.
+- F10 is blocked when other modals (payment, item dialog, etc.) are already open.
+
+#### Default Customer from POS Profile
+
+- The customer search field now shows the POS Profile's configured default customer name (e.g. "Cash Customer", "Walk-in") instead of the hardcoded placeholder.
+- Credit sale validation also uses the POS Profile's default customer as the exclusion reference.
+
+---
+
+### Branding
+
+- App rebranded to **Orbis POS** by Infotop.
+- Login screen title updated to "Orbis POS"; company name shown as subtitle after login.
+- Window title, taskbar name, installer product name, and desktop shortcut all updated.
+- ERPNext URL field pre-filled with `https://` so users type only the domain.
 
 ---
 
