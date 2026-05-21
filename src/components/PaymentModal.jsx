@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { createPOSInvoice, submitPOSInvoice, createSalesInvoice, submitSalesInvoice, resolveGiftCardAccount, validateGiftVoucherSerial, searchDeliveredSerialNos, getApplicableTaxes, getItemTaxTemplates } from '../services/api'
-import { queueInvoice } from '../services/cache'
+import { createPOSInvoice, submitPOSInvoice, createSalesInvoice, submitSalesInvoice, resolveGiftCardAccount, validateGiftVoucherSerial, searchDeliveredSerialNos, markSerialNoUsed, getApplicableTaxes, getItemTaxTemplates } from '../services/api'
+import { queueInvoice, cacheGetPersist, cacheSetPersist } from '../services/cache'
 
 export default function PaymentModal() {
   const {
@@ -13,6 +13,7 @@ export default function PaymentModal() {
     billPaymentType, setBillPaymentType,
     addSoldToSession,
     returnCredit, returnInvoiceName, clearReturnCredit,
+    username, userFullName,
   } = usePOSStore()
 
   const grandTotal  = getGrandTotal()
@@ -23,24 +24,23 @@ export default function PaymentModal() {
   const [submitting,    setSubmitting]    = useState(false)
   const [error,         setError]         = useState('')
   const [changeOverlay, setChangeOverlay] = useState(null)
-  const [giftVoucher,        setGiftVoucher]        = useState({ show: false, amount: '' })
+  const [giftRows,           setGiftRows]           = useState([])           // [{id,serial,amount,status,serialData}]
   const [giftModeName,       setGiftModeName]       = useState('Gift Card')  // ERPNext Mode of Payment name
   const [giftAccount,        setGiftAccount]        = useState(null)         // resolved GL account (or null)
   const [giftAccResolving,   setGiftAccResolving]   = useState(false)
   const [cashAccount,        setCashAccount]        = useState(null)         // GL account for cash payments
   const [bankAccount,        setBankAccount]        = useState(null)         // GL account for card/bank payments
   const [kokoAccount,        setKokoAccount]        = useState(null)         // GL account for Koko Pay
-  const containerRef   = useRef(null)
-  const inputRefs      = useRef([])
-  const giftVoucherRef = useRef(null)
-  const serialRef      = useRef(null)
+  const containerRef      = useRef(null)
+  const inputRefs         = useRef([])
+  const giftRowSerialRefs = useRef({})   // rowId → input element
 
-  const [giftSerial,         setGiftSerial]         = useState('')
-  const [giftSerialStatus,   setGiftSerialStatus]   = useState(null) // null|'checking'|'valid'|'invalid'|'expired'
-  const [giftSerialData,     setGiftSerialData]     = useState(null)
-  const [serialSuggestions,  setSerialSuggestions]  = useState([])
-  const [serialDropIdx,      setSerialDropIdx]      = useState(0)
-  const serialDebounce = useRef(null)
+  const [giftSuggestRowId,  setGiftSuggestRowId]   = useState(null)  // which row has the open autocomplete
+  const [giftActiveSerial,  setGiftActiveSerial]   = useState('')    // serial being typed (drives debounce)
+  const [serialSuggestions, setSerialSuggestions]  = useState([])
+  const [serialDropIdx,     setSerialDropIdx]      = useState(0)
+  const serialDebounce  = useRef(null)
+  const prefetchedTax   = useRef({ ready: false, taxInfo: null, itemTaxMap: {} })
 
   // Derive lowercase version for comparisons; driven by store so header F8 stays in sync
   const paymentType    = billPaymentType === 'Credit' ? 'credit' : 'cash'
@@ -69,11 +69,10 @@ export default function PaymentModal() {
     setActiveIdx(0)
     setError('')
     setChangeOverlay(null)
-    setGiftVoucher({ show: false, amount: '' })
+    setGiftRows([])
     setGiftAccount(null)
-    setGiftSerial('')
-    setGiftSerialStatus(null)
-    setGiftSerialData(null)
+    setGiftSuggestRowId(null)
+    setGiftActiveSerial('')
     setSerialSuggestions([])
     setSerialDropIdx(0)
 
@@ -82,6 +81,21 @@ export default function PaymentModal() {
     window.electronAPI.storeGet('cashAccount').then((v) => setCashAccount(v || null))
     window.electronAPI.storeGet('bankAccount').then((v) => setBankAccount(v || null))
     window.electronAPI.storeGet('kokoAccount').then((v) => setKokoAccount(v || null))
+
+    // Pre-fetch tax info in the background while the cashier enters payment amounts,
+    // so the Confirm button submits immediately instead of waiting for two API calls.
+    prefetchedTax.current = { ready: false, taxInfo: null, itemTaxMap: {} }
+    const _company     = posProfileData?.company || ''
+    const _taxCategory = currentBill.customer?.tax_category || posProfileData?.tax_category || ''
+    const _codes       = [...new Set(currentBill.items.map((i) => i.item_code))]
+    Promise.all([
+      _taxCategory ? getApplicableTaxes(_company, _taxCategory) : Promise.resolve(null),
+      getItemTaxTemplates(_codes),
+    ]).then(([tax, itemTax]) => {
+      prefetchedTax.current = { ready: true, taxInfo: tax, itemTaxMap: itemTax || {} }
+    }).catch(() => {
+      prefetchedTax.current = { ready: true, taxInfo: null, itemTaxMap: {} }
+    })
 
     setTimeout(() => {
       containerRef.current?.focus()
@@ -95,16 +109,17 @@ export default function PaymentModal() {
     }
   }, [activeIdx])
 
-  // Debounced autocomplete search for delivered gift voucher serials
+  // Debounced autocomplete search for delivered gift voucher serials (active row)
   useEffect(() => {
     clearTimeout(serialDebounce.current)
-    if (!giftSerial.trim() || giftSerialStatus === 'valid') {
+    const activeRow = giftSuggestRowId ? giftRows.find((r) => r.id === giftSuggestRowId) : null
+    if (!giftActiveSerial.trim() || activeRow?.status === 'valid') {
       setSerialSuggestions([])
       return
     }
     serialDebounce.current = setTimeout(async () => {
       try {
-        const results = await searchDeliveredSerialNos(giftSerial.trim())
+        const results = await searchDeliveredSerialNos(giftActiveSerial.trim())
         setSerialSuggestions(results)
         setSerialDropIdx(0)
       } catch {
@@ -112,12 +127,13 @@ export default function PaymentModal() {
       }
     }, 220)
     return () => clearTimeout(serialDebounce.current)
-  }, [giftSerial])
+  }, [giftActiveSerial])
 
-  // When gift card amount changes, auto-reduce cash so cash + gift + return = net total.
+  // When any gift row amount changes, auto-reduce cash so cash + gifts + return = net total.
+  const _totalGiftForEffect = giftRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
   useEffect(() => {
-    if (!giftVoucher.show) return
-    const gift   = parseFloat(giftVoucher.amount) || 0
+    if (giftRows.length === 0) return
+    const gift   = _totalGiftForEffect
     const retAmt = parseFloat(returnCredit) || 0
     const net    = Math.max(0, grandTotal - retAmt)
     setPayments((prev) => {
@@ -129,13 +145,15 @@ export default function PaymentModal() {
         p.mode.toLowerCase().includes('cash') ? { ...p, amount: cashNeeded, autoFilled: gift > 0 } : p
       )
     })
-  }, [giftVoucher.amount])
+  }, [_totalGiftForEffect])
 
   // ── Computed totals ──────────────────────────────────────────────────────
-  const giftAmt      = parseFloat(giftVoucher.amount) || 0
+  const giftAmt      = giftRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
   const returnAmt    = parseFloat(returnCredit) || 0
   // grandTotal after deducting any return credit
   const netTotal     = Math.max(0, parseFloat((grandTotal - returnAmt).toFixed(2)))
+  // When return credit exceeds the new bill, cashier must give back the difference in cash
+  const returnOverpay = parseFloat(Math.max(0, returnAmt - grandTotal).toFixed(2))
 
   const nonCashTotal = payments
     .filter((p) => !p.mode.toLowerCase().includes('cash'))
@@ -144,9 +162,11 @@ export default function PaymentModal() {
   const cashPaid    = cashPayment?.amount || 0
   const cashNeeded  = Math.max(0, netTotal - nonCashTotal)
   const change      = cashPaid > cashNeeded ? parseFloat((cashPaid - cashNeeded).toFixed(2)) : 0
+  // Total change to hand back: cash change + return credit surplus
+  const totalChange   = parseFloat((change + returnOverpay).toFixed(2))
 
   const totalPaid     = payments.reduce((s, p) => s + p.amount, 0) + giftAmt + returnAmt
-  const effectivePaid = totalPaid - change
+  const effectivePaid = totalPaid - totalChange
   const balanceDue    = parseFloat(Math.max(0, grandTotal - effectivePaid).toFixed(2))
 
   // Credit mode: requires a real named customer — not null and not the Walk-in default
@@ -200,47 +220,50 @@ export default function PaymentModal() {
       }
       if (!inText && e.key.toLowerCase() === 'g') {
         e.preventDefault()
-        if (!giftVoucher.show) enableGiftCard()
-        else serialRef.current?.focus()
+        if (giftRows.length === 0) enableGiftCard()
+        else addGiftRow()
       }
     }
   }
 
   // ── Gift card helpers ───────────────────────────────────────────────────
-  async function enableGiftCard() {
-    setGiftVoucher({ show: true, amount: '' })
+  function newGiftRowId() { return Math.random().toString(36).slice(2, 9) }
 
-    // 1st priority: custom field on POS Profile (gift_card account set in ERPNext)
+  async function resolveGiftAccount() {
     const fromProfile = posProfileData?.gift_card
-    if (fromProfile) {
-      setGiftAccount(fromProfile)
-      setTimeout(() => giftVoucherRef.current?.focus(), 40)
-      return
-    }
-
-    // 2nd priority: full account name stored in settings
+    if (fromProfile) { setGiftAccount(fromProfile); return }
     const storedAccount = await window.electronAPI.storeGet('giftAccount') || ''
-    if (storedAccount) {
-      setGiftAccount(storedAccount)
-      setTimeout(() => giftVoucherRef.current?.focus(), 40)
-      return
-    }
-
-    // Fallback: try Mode of Payment lookup
+    if (storedAccount) { setGiftAccount(storedAccount); return }
     setGiftAccResolving(true)
     const company = posProfileData?.company || ''
     const account = await resolveGiftCardAccount(giftModeName, company, '')
     setGiftAccount(account)
     setGiftAccResolving(false)
-    setTimeout(() => giftVoucherRef.current?.focus(), 40)
+  }
+
+  async function enableGiftCard() {
+    const id = newGiftRowId()
+    setGiftRows([{ id, serial: '', amount: '', status: null, serialData: null }])
+    await resolveGiftAccount()
+    setTimeout(() => giftRowSerialRefs.current[id]?.focus(), 40)
+  }
+
+  function addGiftRow() {
+    const id = newGiftRowId()
+    setGiftRows((prev) => [...prev, { id, serial: '', amount: '', status: null, serialData: null }])
+    setTimeout(() => giftRowSerialRefs.current[id]?.focus(), 40)
+  }
+
+  function removeGiftRow(rowId) {
+    setGiftRows((prev) => prev.filter((r) => r.id !== rowId))
+    if (giftSuggestRowId === rowId) { setSerialSuggestions([]); setGiftSuggestRowId(null) }
   }
 
   function disableGiftCard() {
-    setGiftVoucher({ show: false, amount: '' })
+    setGiftRows([])
     setGiftAccount(null)
-    setGiftSerial('')
-    setGiftSerialStatus(null)
-    setGiftSerialData(null)
+    setGiftSuggestRowId(null)
+    setGiftActiveSerial('')
     setSerialSuggestions([])
     setSerialDropIdx(0)
     // Restore cash to cover the net total (after return credit) again
@@ -265,30 +288,29 @@ export default function PaymentModal() {
     return isNaN(n) || n <= 0 ? null : n
   }
 
-  async function validateSerial(serial) {
+  async function validateSerial(rowId, serial) {
     const s = serial.trim()
     if (!s) return
     setSerialSuggestions([])
-    setGiftSerialStatus('checking')
-    setGiftSerialData(null)
+    setGiftRows((prev) => prev.map((r) => r.id === rowId ? { ...r, status: 'checking', serialData: null } : r))
     try {
       const data = await validateGiftVoucherSerial(s)
-      setGiftSerialData(data)
       const today = new Date().toISOString().split('T')[0]
+      let status = 'invalid'
       if (data.status !== 'Delivered') {
-        setGiftSerialStatus('invalid')
+        status = 'invalid'
       } else if (data.warranty_expiry_date && data.warranty_expiry_date < today) {
-        setGiftSerialStatus('expired')
+        status = 'expired'
       } else {
-        setGiftSerialStatus('valid')
-        // Auto-populate denomination if amount field is empty
-        if (!giftVoucher.amount) {
-          const denom = parseDenomination(data.item_name)
-          if (denom) setGiftVoucher((g) => ({ ...g, amount: String(denom) }))
-        }
+        status = 'valid'
       }
+      setGiftRows((prev) => prev.map((r) => {
+        if (r.id !== rowId) return r
+        const denom = status === 'valid' && !r.amount ? parseDenomination(data.item_name) : null
+        return { ...r, status, serialData: data, ...(denom ? { amount: String(denom) } : {}) }
+      }))
     } catch {
-      setGiftSerialStatus('invalid')
+      setGiftRows((prev) => prev.map((r) => r.id === rowId ? { ...r, status: 'invalid', serialData: null } : r))
     }
   }
 
@@ -306,7 +328,7 @@ export default function PaymentModal() {
         const nonCashTotal = updated
           .filter((p) => !p.mode.toLowerCase().includes('cash'))
           .reduce((s, p) => s + p.amount, 0)
-        const currentGift  = parseFloat(giftVoucher.amount) || 0
+        const currentGift  = giftRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
         const retAmt       = parseFloat(returnCredit) || 0
         const net          = Math.max(0, grandTotal - retAmt)
         const cashNeeded   = Math.max(0, parseFloat((net - nonCashTotal - currentGift).toFixed(2)))
@@ -336,6 +358,11 @@ export default function PaymentModal() {
         rate:      item.unitPrice,
         uom:       item.uom || 'Nos',
         warehouse,
+      }
+      if (item.isFreePromo) {
+        entry.is_free_item       = 1
+        entry.rate               = 0
+        entry.discount_percentage = 100
       }
       if (item.serial_no) entry.serial_no = item.serial_no
       if (item.batch_no)  entry.batch_no  = item.batch_no
@@ -376,17 +403,23 @@ export default function PaymentModal() {
       }] : []),
     ]
 
+    // If any item was given as a promotional free item, we already handled the scheme
+    // client-side. Tell ERPNext not to re-apply its own pricing rules so the free item
+    // isn't duplicated on the server.
+    const hasPromoItems = items.some((i) => i.is_free_item)
+
     const doc = {
-      doctype:        'POS Invoice',
-      pos_profile:    posProfile,
-      company:        posProfileData?.company  || '',
-      currency:       posProfileData?.currency || 'LKR',
-      customer:       currentBill.customer?.name || defaultCustomer,
-      posting_date:   today,
-      set_warehouse:  warehouse,
+      doctype:               'POS Invoice',
+      pos_profile:           posProfile,
+      company:               posProfileData?.company  || '',
+      currency:              posProfileData?.currency || 'LKR',
+      customer:              currentBill.customer?.name || defaultCustomer,
+      posting_date:          today,
+      set_warehouse:         warehouse,
       items,
-      payments:       paymentEntries,
-      change_amount:  changeAmt || 0,
+      payments:              paymentEntries,
+      change_amount:         changeAmt || 0,
+      ignore_pricing_rule:   hasPromoItems ? 1 : 0,
     }
 
     // Required by ERPNext v14+ — links the invoice to the session so SLEs are
@@ -428,6 +461,11 @@ export default function PaymentModal() {
         uom:       item.uom || 'Nos',
         warehouse,
       }
+      if (item.isFreePromo) {
+        entry.is_free_item        = 1
+        entry.rate                = 0
+        entry.discount_percentage = 100
+      }
       if (item.serial_no) entry.serial_no = item.serial_no
       if (item.batch_no)  entry.batch_no  = item.batch_no
       // Item-level tax template (India GST / per-item tax compliance)
@@ -436,14 +474,17 @@ export default function PaymentModal() {
       return entry
     })
 
+    const hasPromoItems = items.some((i) => i.is_free_item)
+
     const doc = {
-      doctype:        'Sales Invoice',
-      company:        posProfileData?.company  || '',
-      currency:       posProfileData?.currency || 'LKR',
-      customer:       currentBill.customer.name,
-      posting_date:   today,
-      set_warehouse:  warehouse,
-      is_pos:         0,   // regular Sales Invoice — creates receivable automatically
+      doctype:             'Sales Invoice',
+      company:             posProfileData?.company  || '',
+      currency:            posProfileData?.currency || 'LKR',
+      customer:            currentBill.customer.name,
+      posting_date:        today,
+      set_warehouse:       warehouse,
+      is_pos:              0,   // regular Sales Invoice — creates receivable automatically
+      ignore_pricing_rule: hasPromoItems ? 1 : 0,
       items,
     }
 
@@ -469,74 +510,175 @@ export default function PaymentModal() {
   }
 
   // ── Build receipt HTML (80mm thermal-style) ──────────────────────────────
-  function buildReceiptHtml(invoiceName) {
-    const company    = posProfileData?.company || 'POS'
-    const dateStr    = new Date().toLocaleString()
-    const customer   = currentBill.customer?.customer_name
-                       || posProfileData?.customer
-                       || 'Walk-in Customer'
+  function buildReceiptHtml(invoiceName, billHeader = '', billFooter = '', billHeaderImage = null, billFooterImage = null) {
+    const now      = new Date()
+    const dateStr  = now.toLocaleDateString('en-CA')   // YYYY-MM-DD
+    const timeStr  = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+    const _rawName  = userFullName || username || ''
+    const _firstName = _rawName.includes('@') ? _rawName.split('@')[0].split('.')[0] : _rawName.split(' ')[0]
+    const cashier   = _firstName.charAt(0).toUpperCase() + _firstName.slice(1)
+    const customer = currentBill.customer?.customer_name || posProfileData?.customer || 'Walk-in Customer'
+    const itemCount = currentBill.items.length
 
-    const itemRows = currentBill.items.map((i) => `
-      <tr>
-        <td style="padding:2px 0;max-width:120px;overflow:hidden">${i.item_name}</td>
-        <td style="text-align:right;padding:2px 6px;white-space:nowrap">${i.qty}&nbsp;×&nbsp;${fmt(i.unitPrice)}</td>
-        <td style="text-align:right;padding:2px 0;white-space:nowrap">${fmt(i.total)}</td>
-      </tr>`).join('')
+    // Sub total = raw item totals before bill discount
+    const subTotal = currentBill.items.reduce((s, i) => s + i.total, 0)
 
+    // Total savings = per-item price discounts + bill-level discount
+    const totalItemDiscount = currentBill.items
+      .filter((i) => !i.isFreePromo)
+      .reduce((s, i) => {
+        const lp = i.markedPrice ?? i.basePrice ?? i.unitPrice
+        return s + Math.round((lp - i.unitPrice) * i.qty * 100) / 100
+      }, 0)
+    const totalSaved = Math.round((totalItemDiscount + discountAmt) * 100) / 100
+
+    // Payment rows
     const allPayments = paymentType === 'credit'
       ? [{ mode: 'Credit (Receivable)', amount: grandTotal }]
       : [
           ...payments.filter((p) => p.amount > 0),
-          ...(giftAmt > 0 ? [{ mode: giftModeName, amount: giftAmt, serial: giftSerial }] : []),
-          ...(returnAmt > 0 ? [{ mode: `Return Credit (${returnInvoiceName || 'return'})`, amount: returnAmt }] : []),
+          ...(giftAmt > 0 ? [{ mode: giftModeName, amount: giftAmt }] : []),
+          ...(returnAmt > 0 ? [{ mode: 'Return Credit', amount: returnAmt }] : []),
         ]
-    const payRows = allPayments.map((p) => `
+    const paymentReceived = allPayments.reduce((s, p) => s + parseFloat(p.amount || 0), 0)
+    const paymentRowsHtml = allPayments.map((p) =>
+      `<tr><td class="lbl">${p.mode} :</td><td class="val">${fmt(p.amount)}</td></tr>`
+    ).join('')
+
+    // Item rows — item name on its own line, detail row below
+    const itemRows = currentBill.items.map((i) => {
+      const mrp     = i.markedPrice ?? i.basePrice ?? i.unitPrice
+      const isFree  = !!i.isFreePromo
+      const uom     = i.uom || 'Pcs'
+      return `
         <tr>
-          <td style="padding:1px 0">${p.mode}${p.serial ? ` #${p.serial}` : ''}</td>
-          <td style="text-align:right;padding:1px 0">${fmt(p.amount)}</td>
-        </tr>`).join('')
+          <td colspan="4" style="padding:4px 0 1px 0;font-weight:bold;word-break:break-all">
+            ${i.item_name}${isFree ? ' <span style="color:green;font-weight:normal">[FREE]</span>' : ''}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 0 5px 0;white-space:nowrap">${i.qty}&nbsp;${uom}</td>
+          <td style="text-align:right;padding:0 2px 5px;white-space:nowrap">${fmt(mrp)}</td>
+          <td style="text-align:right;padding:0 2px 5px;white-space:nowrap">${isFree ? 'FREE' : fmt(i.unitPrice)}</td>
+          <td style="text-align:right;padding:0 0 5px 0;white-space:nowrap;font-weight:bold">${isFree ? '0.00' : fmt(i.total)}</td>
+        </tr>`
+    }).join('')
+
+    // Header / footer — stored as HTML from the rich text editor
+    const toHtml = (s) => {
+      if (!s) return ''
+      // Legacy plain text (no tags) → convert newlines to <br>
+      return s.includes('<') ? s : s.replace(/\n/g, '<br>')
+    }
+    const headerImgHtml = billHeaderImage
+      ? `<div style="width:100%;margin-bottom:6px;text-align:center"><img src="${billHeaderImage}" style="width:100%;max-height:50mm;object-fit:contain;display:block"/></div>`
+      : ''
+    const headerTxtHtml = billHeader
+      ? `<div style="width:100%;margin-bottom:8px;line-height:1.4;font-size:48px">${toHtml(billHeader)}</div>`
+      : ''
+    const footerTxtHtml = billFooter
+      ? `<div style="width:100%;margin-top:10px;line-height:1.4">${toHtml(billFooter)}</div>`
+      : ''
+    const footerImgHtml = billFooterImage
+      ? `<div style="width:100%;margin-top:6px;text-align:center"><img src="${billFooterImage}" style="width:100%;max-height:35mm;object-fit:contain;display:block"/></div>`
+      : ''
 
     return `<!DOCTYPE html><html><head>
       <meta charset="utf-8">
+      <meta name="viewport" content="width=800">
       <style>
         *{margin:0;padding:0;box-sizing:border-box}
-        body{font-family:'Courier New',monospace;font-size:12px;width:80mm;padding:5mm}
-        h1{font-size:14px;text-align:center;margin-bottom:2px}
-        .c{text-align:center}
-        .sep{border-top:1px dashed #000;margin:5px 0}
+        p{margin:0}
+        div{max-width:100%}
+        img{max-width:100%;height:auto}
+        thead{display:table-row-group}
+        body{font-family:Arial,Helvetica,sans-serif;font-size:38px;width:100%;padding:4mm 12mm 4mm 5mm}
+        .sep{border-top:3px dashed #000;margin:10px 0}
+        .sep-s{border-top:3px solid #000;margin:10px 0}
         table{width:100%;border-collapse:collapse}
-        .tot td{font-weight:bold;font-size:14px;padding-top:3px}
-        .chg td{font-style:italic}
-        @media print{@page{margin:0;size:80mm auto}}
+        td,th{vertical-align:top}
+        .lbl{text-align:right;padding:3px 10px 3px 0;color:#333;font-size:38px}
+        .val{text-align:right;white-space:nowrap;font-weight:bold;font-size:38px}
+        .grand td{font-size:44px;font-weight:bold}
+        @page{margin:0;size:80mm auto}
       </style>
     </head><body>
-      <h1>${company}</h1>
-      <p class="c" style="font-size:10px">${dateStr}</p>
-      <p class="c" style="font-size:10px">${invoiceName}</p>
-      <p class="c" style="font-size:10px">Customer: ${customer}</p>
+
+      ${headerImgHtml}
+      ${headerTxtHtml}
       <div class="sep"></div>
-      <table><thead>
+
+      <table style="font-size:34px;table-layout:fixed;width:100%">
+        <colgroup><col style="width:55%"><col style="width:45%"></colgroup>
         <tr>
-          <th style="text-align:left">Item</th>
-          <th style="text-align:right">Qty×Rate</th>
-          <th style="text-align:right">Amt</th>
+          <td style="word-break:break-all"><b>Invoice No</b><br>${invoiceName}</td>
+          <td style="text-align:right;overflow:hidden;word-break:break-all"><b>No. of Items</b><br>${itemCount}</td>
         </tr>
-      </thead><tbody>${itemRows}</tbody></table>
+        <tr style="height:5px"></tr>
+        <tr>
+          <td><b>Date</b><br>${dateStr}</td>
+          <td style="text-align:right;overflow:hidden;word-break:break-all"><b>Time</b><br>${timeStr}</td>
+        </tr>
+        <tr style="height:5px"></tr>
+        <tr>
+          <td style="overflow:hidden"><b>Counter</b><br>${posProfile || ''}</td>
+          <td style="text-align:right;overflow:hidden;word-break:break-all"><b>Cashier</b><br>${cashier}</td>
+        </tr>
+      </table>
+      <div style="text-align:center;margin:8px 0;font-size:36px"><b>Customer</b><br>${customer}</div>
+
       <div class="sep"></div>
-      ${discountAmt > 0 ? `<table><tr><td>Discount</td><td style="text-align:right">- ${fmt(discountAmt)}</td></tr></table>` : ''}
-      <table><tr class="tot"><td>TOTAL</td><td style="text-align:right">${fmt(grandTotal)}</td></tr></table>
+      <table>
+        <tbody style="font-size:36px">
+          <tr style="border-bottom:3px dashed #000;font-size:32px">
+            <td style="text-align:left;padding-bottom:5px;width:28%;font-weight:bold">Qty</td>
+            <td style="text-align:right;padding-bottom:5px;width:24%;font-weight:bold">MRP</td>
+            <td style="text-align:right;padding-bottom:5px;width:24%;font-weight:bold">S.Price</td>
+            <td style="text-align:right;padding-bottom:5px;width:24%;font-weight:bold">Total</td>
+          </tr>
+          ${itemRows}
+        </tbody>
+      </table>
+      <div class="sep-s"></div>
+
+      <table>
+        <tr><td class="lbl">Total :</td><td class="val">${fmt(subTotal)}</td></tr>
+        <tr><td class="lbl">Return :</td><td class="val">${fmt(returnAmt > 0 ? returnAmt : 0)}</td></tr>
+        ${discountAmt > 0 ? `<tr><td class="lbl">Discount :</td><td class="val">${fmt(discountAmt)}</td></tr>` : ''}
+        <tr class="grand"><td class="lbl">Grand Total :</td><td class="val" style="text-decoration:underline double">${fmt(grandTotal)}</td></tr>
+        <tr style="height:4px"></tr>
+        ${paymentRowsHtml}
+        <tr><td class="lbl">Balance :</td><td class="val">${fmt(Math.max(0, totalChange))}</td></tr>
+      </table>
+
+      ${totalSaved > 0 ? `
+      <div style="border:3px solid #000;margin:10px 0;padding:6px 10px;text-align:center;font-size:38px;font-weight:bold">
+        Discount for this invoice : ${fmt(totalSaved)}
+      </div>` : ''}
+
       <div class="sep"></div>
-      <table>${payRows}</table>
-      ${change > 0 ? `<table><tr class="chg"><td>Change</td><td style="text-align:right">${fmt(change)}</td></tr></table>` : ''}
-      <div class="sep"></div>
-      <p class="c" style="margin-top:8px;font-size:11px">Thank you!</p>
+      ${footerTxtHtml}${footerImgHtml}
+
     </body></html>`
   }
 
   async function printReceipt(invoiceName) {
     try {
-      const html = buildReceiptHtml(invoiceName)
-      if (window.electronAPI?.printReceipt) await window.electronAPI.printReceipt(html)
+      const [billHeader, billFooter, billHeaderImage, billFooterImage, receiptPrinter] = await Promise.all([
+        window.electronAPI.storeGet('billHeader').catch(() => ''),
+        window.electronAPI.storeGet('billFooter').catch(() => ''),
+        window.electronAPI.storeGet('billHeaderImage').catch(() => null),
+        window.electronAPI.storeGet('billFooterImage').catch(() => null),
+        window.electronAPI.storeGet('receiptPrinter').catch(() => ''),
+      ])
+      const html = buildReceiptHtml(
+        invoiceName,
+        billHeader || '',
+        billFooter || '',
+        billHeaderImage || null,
+        billFooterImage || null,
+      )
+      if (window.electronAPI?.printReceipt) await window.electronAPI.printReceipt(html, receiptPrinter || undefined)
     } catch (e) {
       console.error('Print failed:', e)
     }
@@ -581,27 +723,32 @@ export default function PaymentModal() {
       setError(`Balance due: ${fmt(balanceDue)} — add more payment`)
       return
     }
-    if (paymentType === 'cash' && giftVoucher.show && giftAmt > 0 && !giftAccount) {
+    if (paymentType === 'cash' && giftRows.length > 0 && giftAmt > 0 && !giftAccount) {
       setError(`Gift card account is not configured — set the "Gift Card" field on the POS Profile in ERPNext, or configure a GL account in Settings.`)
       return
     }
     setSubmitting(true)
     setError('')
 
-    // Resolve applicable taxes before try so catch block can access both vars
+    // Resolve applicable taxes — use pre-fetched data if ready, else fetch now
     const company     = posProfileData?.company || ''
     const taxCategory = currentBill.customer?.tax_category || posProfileData?.tax_category || ''
     let taxInfo    = null
     let itemTaxMap = {}
-    try {
-      const uniqueCodes = [...new Set(currentBill.items.map((i) => i.item_code))]
-      const [resolvedTax, resolvedItemTax] = await Promise.all([
-        taxCategory ? getApplicableTaxes(company, taxCategory) : Promise.resolve(null),
-        getItemTaxTemplates(uniqueCodes),
-      ])
-      taxInfo    = resolvedTax
-      itemTaxMap = resolvedItemTax || {}
-    } catch { /* ignore — fallback below */ }
+    if (prefetchedTax.current.ready) {
+      taxInfo    = prefetchedTax.current.taxInfo
+      itemTaxMap = prefetchedTax.current.itemTaxMap
+    } else {
+      try {
+        const uniqueCodes = [...new Set(currentBill.items.map((i) => i.item_code))]
+        const [resolvedTax, resolvedItemTax] = await Promise.all([
+          taxCategory ? getApplicableTaxes(company, taxCategory) : Promise.resolve(null),
+          getItemTaxTemplates(uniqueCodes),
+        ])
+        taxInfo    = resolvedTax
+        itemTaxMap = resolvedItemTax || {}
+      } catch { /* ignore — fallback below */ }
+    }
     if (!taxInfo) {
       const profileTaxes = posProfileData?.taxes || []
       if (profileTaxes.length > 0 || posProfileData?.taxes_and_charges) {
@@ -623,23 +770,33 @@ export default function PaymentModal() {
         finishCheckout(0)
       } else {
         // ── Cash / Card sale → POS Invoice
-        const changeAmt   = change
-        const invoiceData = buildInvoice(changeAmt, taxInfo, itemTaxMap)
+        const invoiceData = buildInvoice(totalChange, taxInfo, itemTaxMap)
         if (!isOnline) throw new Error('offline')
         const draft = await createPOSInvoice(invoiceData)
         if (!draft?.name) throw new Error('Invoice created but no name returned')
         // Pass full draft doc — avoids an extra GET round-trip before submit
         await submitPOSInvoice(draft)
+        // Track exchange overpayment so SalesSummary can show it as Refund Paid
+        if (returnAmt > 0 && returnOverpay > 0) {
+          try {
+            const overpayMap = (await cacheGetPersist('exchangeOverpayMap')) || {}
+            overpayMap[draft.name] = returnOverpay
+            await cacheSetPersist('exchangeOverpayMap', overpayMap)
+          } catch { /* non-critical */ }
+        }
+        // Mark redeemed gift voucher serials as Inactive so they can't be reused
+        const usedSerials = giftRows.filter((r) => r.status === 'valid' && r.serial).map((r) => r.serial)
+        if (usedSerials.length > 0) await Promise.allSettled(usedSerials.map((s) => markSerialNoUsed(s)))
         printReceipt(draft.name)
         kickCashDrawer()
-        finishCheckout(changeAmt)
+        finishCheckout(totalChange)
       }
     } catch (err) {
       if (paymentType === 'cash' && (!isOnline || err.message === 'offline')) {
-        const invoiceData = buildInvoice(change, taxInfo, itemTaxMap)
+        const invoiceData = buildInvoice(totalChange, taxInfo, itemTaxMap)
         await queueInvoice(invoiceData)
         kickCashDrawer()
-        finishCheckout(change)
+        finishCheckout(totalChange)
       } else {
         // err.message is the clean human-readable message parsed from _server_messages
         // by the request() helper. Only fall back to the raw traceback (exc) if nothing
@@ -667,9 +824,11 @@ export default function PaymentModal() {
       {/* ── Change overlay — shown for 3 s after checkout when overpaid ── */}
       {changeOverlay !== null && (
         <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-[60]">
-          <div className="bg-gray-800 border-2 border-yellow-600 rounded-3xl px-16 py-12 text-center shadow-2xl">
-            <p className="text-yellow-400 text-sm font-semibold uppercase tracking-widest mb-3">Change to Return</p>
-            <p className="text-yellow-300 font-bold tabular-nums" style={{ fontSize: '5rem', lineHeight: 1 }}>
+          <div className={`bg-gray-800 rounded-3xl px-16 py-12 text-center shadow-2xl border-2 ${returnOverpay > 0 && change === 0 ? 'border-orange-600' : 'border-yellow-600'}`}>
+            <p className={`text-sm font-semibold uppercase tracking-widest mb-3 ${returnOverpay > 0 && change === 0 ? 'text-orange-400' : 'text-yellow-400'}`}>
+              {returnOverpay > 0 && change === 0 ? 'Pay to Customer' : 'Change to Return'}
+            </p>
+            <p className={`font-bold tabular-nums ${returnOverpay > 0 && change === 0 ? 'text-orange-300' : 'text-yellow-300'}`} style={{ fontSize: '5rem', lineHeight: 1 }}>
               {fmt(changeOverlay)}
             </p>
             <p className="text-gray-600 text-xs mt-6">Returning to new bill…</p>
@@ -681,7 +840,9 @@ export default function PaymentModal() {
         ref={containerRef}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
-        className="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md border border-gray-600 outline-none"
+        className={`bg-gray-800 rounded-2xl shadow-2xl w-full border border-gray-600 outline-none ${
+          paymentType === 'cash' && giftRows.length > 0 ? 'max-w-3xl' : 'max-w-md'
+        }`}
       >
         <>
 
@@ -720,10 +881,30 @@ export default function PaymentModal() {
                   <span className="text-white font-bold text-xl tabular-nums">{fmt(netTotal)}</span>
                 </div>
               )}
+              {returnOverpay > 0 && (
+                <div className="mt-2 px-3 py-2.5 bg-orange-900/30 border border-orange-700 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-orange-300 text-xs font-bold uppercase tracking-wider">Pay to Customer</p>
+                      <p className="text-orange-400/70 text-xs mt-0.5">Return credit exceeds bill — give cash back</p>
+                    </div>
+                    <span className="text-orange-300 font-bold text-2xl tabular-nums">{fmt(returnOverpay)}</span>
+                  </div>
+                  <p className="text-orange-400/60 text-xs mt-1.5 border-t border-orange-800/50 pt-1.5">
+                    Click <strong className="text-orange-300">Confirm</strong> → cash drawer opens → hand {fmt(returnOverpay)} cash to customer
+                  </p>
+                </div>
+              )}
             </div>
 
-            {/* ── Payment type toggle: Cash / Credit ───────────── */}
-            <div className="px-6 pt-4 pb-0 flex gap-2">
+            {/* ── Landscape: payments (left) + gift card (right) when gift active ── */}
+            <div className={paymentType === 'cash' && giftRows.length > 0 ? 'flex' : ''}>
+
+              {/* LEFT: payment toggle + rows + summary + confirm */}
+              <div className={`flex flex-col${paymentType === 'cash' && giftRows.length > 0 ? ' flex-1 min-w-0' : ''}`}>
+
+                {/* ── Payment type toggle ───────────── */}
+                <div className="px-6 pt-4 pb-0 flex gap-2">
               <button
                 type="button"
                 onClick={() => setPaymentType('cash')}
@@ -882,159 +1063,8 @@ export default function PaymentModal() {
                 )
               })}
 
-              {/* ── Gift Card (only in cash mode) ────────────────────────────────── */}
-              {paymentType === 'cash' && (giftVoucher.show ? (
-                <div className="rounded-xl border-2 border-purple-600 bg-purple-900/15 overflow-hidden">
-                  {/* Header */}
-                  <div className="flex items-center gap-3 px-4 py-3 border-b border-purple-800/30">
-                    <div className="w-8 h-8 rounded-lg bg-purple-800/60 flex items-center justify-center flex-shrink-0">
-                      <svg className="w-4 h-4 text-purple-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
-                      </svg>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <span className="text-white text-sm font-semibold">{giftModeName}</span>
-                      <div className="text-xs mt-0.5 truncate">
-                        {giftAccResolving
-                          ? <span className="text-gray-500">Resolving account…</span>
-                          : giftAccount
-                            ? <span className="text-green-500">{giftAccount}</span>
-                            : <span className="text-amber-400">No account — set Gift Card field in POS Profile</span>}
-                      </div>
-                    </div>
-                    <button type="button" onClick={disableGiftCard} className="text-gray-600 hover:text-red-400 text-xl leading-none flex-shrink-0">×</button>
-                  </div>
-
-                  {/* Denomination quick-select */}
-                  <div className="px-4 pt-3 pb-2">
-                    <div className="text-xs text-gray-500 mb-1.5">Denomination</div>
-                    <div className="flex gap-1.5 flex-wrap">
-                      {[1000, 2500, 5000, 7500, 10000].map((d) => (
-                        <button
-                          key={d}
-                          type="button"
-                          onClick={() => { setGiftVoucher((g) => ({ ...g, amount: String(d) })); serialRef.current?.focus() }}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                            parseFloat(giftVoucher.amount) === d
-                              ? 'bg-purple-700 border-purple-500 text-white'
-                              : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-purple-500 hover:text-purple-200'
-                          }`}
-                        >
-                          {d >= 1000 ? `${d / 1000}K` : d}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Serial number + Amount */}
-                  <div className="px-4 pb-3 space-y-2">
-                    {/* Serial input + status icon */}
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 relative">
-                        <input
-                          ref={serialRef}
-                          type="text"
-                          placeholder="Type to search voucher serial…"
-                          value={giftSerial}
-                          onChange={(e) => { setGiftSerial(e.target.value); setGiftSerialStatus(null); setGiftSerialData(null) }}
-                          onBlur={() => { setTimeout(() => setSerialSuggestions([]), 200); if (giftSerial.trim() && !serialSuggestions.length) validateSerial(giftSerial) }}
-                          onKeyDown={(e) => {
-                            if (serialSuggestions.length > 0) {
-                              if (e.key === 'ArrowDown') { e.preventDefault(); setSerialDropIdx((i) => Math.min(i + 1, serialSuggestions.length - 1)); return }
-                              if (e.key === 'ArrowUp')   { e.preventDefault(); setSerialDropIdx((i) => Math.max(i - 1, 0)); return }
-                              if (e.key === 'Enter' || e.key === 'Tab') {
-                                e.preventDefault()
-                                const s = serialSuggestions[serialDropIdx]
-                                if (s) { setGiftSerial(s.name); setSerialSuggestions([]); validateSerial(s.name) }
-                                return
-                              }
-                              if (e.key === 'Escape') { e.preventDefault(); setSerialSuggestions([]); return }
-                            }
-                            if (e.key === 'Enter') { e.preventDefault(); validateSerial(giftSerial) }
-                          }}
-                          className="w-full rounded-lg px-3 py-2 text-sm text-white bg-gray-700 border-2 border-gray-600 focus:outline-none focus:border-purple-500 placeholder-gray-600"
-                        />
-                        {serialSuggestions.length > 0 && (
-                          <div className="absolute z-20 left-0 right-0 top-full mt-0.5 bg-gray-900 border border-purple-700/60 rounded-lg shadow-xl overflow-hidden">
-                            {serialSuggestions.map((s, i) => (
-                              <button
-                                key={s.name}
-                                type="button"
-                                onMouseDown={(e) => { e.preventDefault(); setGiftSerial(s.name); setSerialSuggestions([]); validateSerial(s.name) }}
-                                className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                                  i === serialDropIdx ? 'bg-purple-800/60 text-purple-200' : 'text-gray-300 hover:bg-gray-700'
-                                }`}
-                              >
-                                <span className="font-mono font-semibold">{s.name}</span>
-                                {s.item_name && <span className="ml-2 text-gray-500">{s.item_name}</span>}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <div className="w-7 h-7 flex items-center justify-center flex-shrink-0">
-                        {giftSerialStatus === 'checking' && (
-                          <svg className="w-5 h-5 animate-spin text-purple-400" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                          </svg>
-                        )}
-                        {giftSerialStatus === 'valid' && (
-                          <div className="w-6 h-6 rounded-full bg-green-600 flex items-center justify-center">
-                            <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                            </svg>
-                          </div>
-                        )}
-                        {giftSerialStatus === 'invalid' && (
-                          <div className="w-6 h-6 rounded-full bg-red-700 flex items-center justify-center">
-                            <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </div>
-                        )}
-                        {giftSerialStatus === 'expired' && (
-                          <div className="w-6 h-6 rounded-full bg-amber-600 flex items-center justify-center">
-                            <span className="text-white text-xs font-bold">!</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Validation feedback */}
-                    {giftSerialStatus === 'valid' && giftSerialData && (
-                      <p className="text-green-400 text-xs pl-1">
-                        Valid · {giftSerialData.item_code}
-                        {giftSerialData.warranty_expiry_date ? ` · Expires ${giftSerialData.warranty_expiry_date}` : ''}
-                      </p>
-                    )}
-                    {giftSerialStatus === 'invalid' && (
-                      <p className="text-red-400 text-xs pl-1">Not found or voucher not yet issued</p>
-                    )}
-                    {giftSerialStatus === 'expired' && (
-                      <p className="text-amber-400 text-xs pl-1">
-                        Expired{giftSerialData?.warranty_expiry_date ? ` on ${giftSerialData.warranty_expiry_date}` : ''}
-                      </p>
-                    )}
-
-                    {/* Amount */}
-                    <div className="flex items-center gap-3">
-                      <span className="text-gray-400 text-sm flex-1">Amount</span>
-                      <input
-                        ref={giftVoucherRef}
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={giftVoucher.amount}
-                        placeholder="0.00"
-                        onChange={(e) => setGiftVoucher((g) => ({ ...g, amount: e.target.value }))}
-                        onKeyDown={(e) => { if (e.key === 'Enter') return }}
-                        className="w-32 rounded-lg px-3 py-2 text-right font-bold text-base focus:outline-none tabular-nums bg-gray-700 border-2 border-purple-500 text-purple-200"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ) : (
+              {/* ── Apply Gift Card button — panel moves to right column when active ── */}
+              {paymentType === 'cash' && giftRows.length === 0 && (
                 <button
                   type="button"
                   onClick={enableGiftCard}
@@ -1046,7 +1076,7 @@ export default function PaymentModal() {
                   Apply {giftModeName}
                   <span className="text-purple-700 text-xs ml-1">Key: G</span>
                 </button>
-              ))}
+              )}
             </div>
 
             {/* ── Summary (cash mode only) ─────────────────────── */}
@@ -1064,6 +1094,7 @@ export default function PaymentModal() {
                     effectivePaid >= grandTotal ? 'text-green-400' : 'text-gray-300'
                   }`}>{fmt(totalPaid)}</span>
                 </div>
+
 
                 {change > 0 && (
                   <div className="flex items-center justify-between bg-yellow-900/30 border border-yellow-700 rounded-xl px-4 py-3">
@@ -1085,7 +1116,7 @@ export default function PaymentModal() {
                   </div>
                 )}
 
-                {isFullyPaid && change === 0 && (
+                {isFullyPaid && totalChange === 0 && (
                   <div className="flex items-center justify-center gap-2 bg-green-900/20 border border-green-800/50 rounded-lg px-4 py-2">
                     <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
                       <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1143,13 +1174,122 @@ export default function PaymentModal() {
                   'No Session — Cannot Confirm'
                 ) : paymentType === 'credit' ? (
                   `Confirm Credit  ·  ${fmt(grandTotal)}`
+                ) : returnOverpay > 0 && netTotal === 0 ? (
+                  `Confirm — Pay ${fmt(returnOverpay)} to Customer`
                 ) : (
                   `Confirm  ·  ${fmt(grandTotal)}`
                 )}
               </button>
               <p className="text-center text-xs text-gray-600 mt-2">Enter to confirm · ESC to cancel · Tab to switch</p>
             </div>
-          </>
+          </div>{/* end left column */}
+
+          {/* RIGHT column: gift card panel — landscape, only when gift rows active */}
+          {paymentType === 'cash' && giftRows.length > 0 && (
+            <div className="w-80 flex-shrink-0 border-l border-gray-700 flex flex-col overflow-hidden">
+              <div className="flex items-center gap-3 px-4 py-3 border-b border-purple-800/30 bg-purple-900/10">
+                <div className="w-8 h-8 rounded-lg bg-purple-800/60 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-4 h-4 text-purple-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+                  </svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-white text-sm font-semibold">{giftModeName}</span>
+                  <div className="text-xs mt-0.5 truncate">
+                    {giftAccResolving ? <span className="text-gray-500">Resolving account...</span>
+                      : giftAccount ? <span className="text-green-500">{giftAccount}</span>
+                      : <span className="text-amber-400">No account - set Gift Card field in POS Profile</span>}
+                  </div>
+                </div>
+                <button type="button" onClick={disableGiftCard} className="text-gray-600 hover:text-red-400 text-xl leading-none flex-shrink-0">x</button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto divide-y divide-purple-900/40">
+                {giftRows.map((row, rowIdx) => {
+                  const isActiveSuggest = giftSuggestRowId === row.id
+                  return (
+                    <div key={row.id} className="px-4 py-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-purple-400 text-xs font-semibold uppercase tracking-wide">Voucher {rowIdx + 1}</span>
+                        {giftRows.length > 1 && (
+                          <button type="button" onClick={() => removeGiftRow(row.id)} className="text-gray-600 hover:text-red-400 text-sm leading-none">Remove</button>
+                        )}
+                      </div>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {[1000, 2500, 5000, 7500, 10000].map((d) => (
+                          <button key={d} type="button"
+                            onClick={() => { setGiftRows((prev) => prev.map((r) => r.id === row.id ? { ...r, amount: String(d) } : r)); giftRowSerialRefs.current[row.id]?.focus() }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${parseFloat(row.amount) === d ? 'bg-purple-700 border-purple-500 text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-purple-500 hover:text-purple-200'}`}>
+                            {d >= 1000 ? `${d / 1000}K` : d}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 relative">
+                          <input
+                            ref={(el) => { giftRowSerialRefs.current[row.id] = el }}
+                            type="text" placeholder="Voucher serial..." value={row.serial}
+                            onChange={(e) => { const v = e.target.value; setGiftRows((prev) => prev.map((r) => r.id === row.id ? { ...r, serial: v, status: null, serialData: null } : r)); setGiftSuggestRowId(row.id); setGiftActiveSerial(v) }}
+                            onBlur={() => { setTimeout(() => { if (giftSuggestRowId === row.id) setSerialSuggestions([]) }, 200); if (row.serial.trim() && !serialSuggestions.length) validateSerial(row.id, row.serial) }}
+                            onKeyDown={(e) => {
+                              if (isActiveSuggest && serialSuggestions.length > 0) {
+                                if (e.key === 'ArrowDown') { e.preventDefault(); setSerialDropIdx((i) => Math.min(i + 1, serialSuggestions.length - 1)); return }
+                                if (e.key === 'ArrowUp')   { e.preventDefault(); setSerialDropIdx((i) => Math.max(i - 1, 0)); return }
+                                if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); const s = serialSuggestions[serialDropIdx]; if (s) { setGiftRows((prev) => prev.map((r) => r.id === row.id ? { ...r, serial: s.name } : r)); setSerialSuggestions([]); validateSerial(row.id, s.name) } return }
+                                if (e.key === 'Escape') { e.preventDefault(); setSerialSuggestions([]); return }
+                              }
+                              if (e.key === 'Enter') { e.preventDefault(); validateSerial(row.id, row.serial) }
+                            }}
+                            className="w-full rounded-lg px-3 py-2 text-sm text-white bg-gray-700 border-2 border-gray-600 focus:outline-none focus:border-purple-500 placeholder-gray-600"
+                          />
+                          {isActiveSuggest && serialSuggestions.length > 0 && (
+                            <div className="absolute z-20 left-0 right-0 top-full mt-0.5 bg-gray-900 border border-purple-700/60 rounded-lg shadow-xl overflow-hidden">
+                              {serialSuggestions.map((s, i) => (
+                                <button key={s.name} type="button"
+                                  onMouseDown={(e) => { e.preventDefault(); setGiftRows((prev) => prev.map((r) => r.id === row.id ? { ...r, serial: s.name } : r)); setSerialSuggestions([]); validateSerial(row.id, s.name) }}
+                                  className={`w-full text-left px-3 py-2 text-xs transition-colors ${i === serialDropIdx ? 'bg-purple-800/60 text-purple-200' : 'text-gray-300 hover:bg-gray-700'}`}>
+                                  <span className="font-mono font-semibold">{s.name}</span>
+                                  {s.item_name && <span className="ml-2 text-gray-500">{s.item_name}</span>}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="w-7 h-7 flex items-center justify-center flex-shrink-0">
+                          {row.status === 'checking' && <svg className="w-5 h-5 animate-spin text-purple-400" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>}
+                          {row.status === 'valid'    && <div className="w-6 h-6 rounded-full bg-green-600 flex items-center justify-center"><svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7"/></svg></div>}
+                          {row.status === 'invalid'  && <div className="w-6 h-6 rounded-full bg-red-700 flex items-center justify-center"><svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12"/></svg></div>}
+                          {row.status === 'expired'  && <div className="w-6 h-6 rounded-full bg-amber-600 flex items-center justify-center"><span className="text-white text-xs font-bold">!</span></div>}
+                        </div>
+                      </div>
+                      {row.status === 'valid'   && row.serialData && <p className="text-green-400 text-xs pl-1">Valid - {row.serialData.item_code}{row.serialData.warranty_expiry_date ? ` - Expires ${row.serialData.warranty_expiry_date}` : ''}</p>}
+                      {row.status === 'invalid' && <p className="text-red-400 text-xs pl-1">Not found or voucher not yet issued</p>}
+                      {row.status === 'expired' && <p className="text-amber-400 text-xs pl-1">Expired{row.serialData?.warranty_expiry_date ? ` on ${row.serialData.warranty_expiry_date}` : ''}</p>}
+                      <div className="flex items-center gap-3">
+                        <span className="text-gray-400 text-sm flex-1">Amount</span>
+                        <input type="number" min="0" step="0.01" value={row.amount} placeholder="0.00"
+                          onChange={(e) => setGiftRows((prev) => prev.map((r) => r.id === row.id ? { ...r, amount: e.target.value } : r))}
+                          onKeyDown={(e) => { if (e.key === 'Enter') return }}
+                          className="w-32 rounded-lg px-3 py-2 text-right font-bold text-base focus:outline-none tabular-nums bg-gray-700 border-2 border-purple-500 text-purple-200" />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="px-4 py-2 border-t border-purple-900/40 flex-shrink-0">
+                <button type="button" onClick={addGiftRow}
+                  className="w-full flex items-center justify-center gap-2 text-purple-400 hover:text-purple-200 text-xs py-1.5 transition-colors">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add another voucher
+                </button>
+              </div>
+            </div>
+          )}
+        </div>{/* end landscape wrapper */}
+        </>
       </div>
     </div>
   )

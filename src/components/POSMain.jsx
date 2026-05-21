@@ -14,6 +14,7 @@ import Settings from './Settings'
 import OfflineQueueModal from './OfflineQueueModal'
 import VirtualKeyboard from './VirtualKeyboard'
 import ReturnTab from './ReturnTab'
+import BillRecallModal from './BillRecallModal'
 
 export default function POSMain() {
   const store = usePOSStore()
@@ -23,8 +24,15 @@ export default function POSMain() {
   const [syncProgress, setSyncProgress] = useState(0)
   const [syncError, setSyncError]       = useState('')
   const [queueModalOpen, setQueueModalOpen] = useState(false)
+  const [posImage, setPosImage]         = useState(null)
+  const [billRecallOpen, setBillRecallOpen] = useState(false)
   const wasOnline = useRef(store.isOnline)
   const now = new Date()
+
+  // Load custom POS image; reload whenever Settings panel closes
+  useEffect(() => {
+    window.electronAPI?.storeGet('posImage').then((v) => setPosImage(v || null))
+  }, [settingsOpen])
 
   async function handleSync() {
     if (store.syncStatus === 'syncing') return
@@ -204,7 +212,7 @@ export default function POSMain() {
 
   useEffect(() => {
     const handler = (e) => {
-      if (store.itemDialog || store.paymentModal || store.showOpeningModal || store.showSummaryModal || store.showReturnModal || settingsOpen) return
+      if (store.itemDialog || store.paymentModal || store.showOpeningModal || store.showSummaryModal || store.showReturnModal || settingsOpen || billRecallOpen) return
       const tag = document.activeElement?.tagName
       const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 
@@ -223,6 +231,9 @@ export default function POSMain() {
       } else if (e.key === 'F3') {
         e.preventDefault()
         store.holdBill()
+      } else if (e.key === 'F9') {
+        e.preventDefault()
+        setBillRecallOpen(true)
       } else if (e.key === 'F10') {
         e.preventDefault()
         store.setShowReturnModal(true)
@@ -244,7 +255,7 @@ export default function POSMain() {
     return () => window.removeEventListener('keydown', handler)
   }, [
     store.itemDialog, store.paymentModal,
-    store.showOpeningModal, store.showSummaryModal, store.showReturnModal, settingsOpen,
+    store.showOpeningModal, store.showSummaryModal, store.showReturnModal, settingsOpen, billRecallOpen,
     store.currentBill.items.length, store.syncStatus,
   ])
 
@@ -444,10 +455,28 @@ export default function POSMain() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           </button>
-          <div className="flex items-center ml-2 gap-1">
-            <button onClick={() => window.electronAPI?.minimize()} className="w-5 h-5 rounded-full bg-yellow-500 hover:bg-yellow-400 transition-colors flex items-center justify-center text-yellow-900 text-xs">−</button>
-            <button onClick={() => window.electronAPI?.maximize()} className="w-5 h-5 rounded-full bg-green-500 hover:bg-green-400 transition-colors" />
-            <button onClick={() => window.electronAPI?.close()} className="w-5 h-5 rounded-full bg-red-500 hover:bg-red-400 transition-colors flex items-center justify-center text-red-900 text-xs">×</button>
+          <div className="flex items-center ml-2">
+            <button
+              onClick={() => window.electronAPI?.minimize()}
+              title="Minimize"
+              className="w-8 h-7 flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-600 transition-colors"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 10 1" fill="currentColor"><rect width="10" height="1"/></svg>
+            </button>
+            <button
+              onClick={() => window.electronAPI?.maximize()}
+              title="Maximize / Restore"
+              className="w-8 h-7 flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-600 transition-colors"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="0.6" y="0.6" width="8.8" height="8.8"/></svg>
+            </button>
+            <button
+              onClick={() => window.electronAPI?.close()}
+              title="Close"
+              className="w-8 h-7 flex items-center justify-center text-gray-400 hover:text-white hover:bg-red-600 transition-colors"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.2"><line x1="0" y1="0" x2="10" y2="10"/><line x1="10" y1="0" x2="0" y2="10"/></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -459,13 +488,18 @@ export default function POSMain() {
             <ItemGrid />
           </div>
         )}
-        <div className="flex flex-col" style={{ width: itemsHidden ? '100%' : '40%' }}>
+        <div className="flex flex-col overflow-hidden" style={{ width: itemsHidden ? '100%' : '40%' }}>
           <div className="px-4 py-2 bg-gray-800 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-2">
               <h2 className="text-white font-semibold text-sm">Current Bill</h2>
               {store.returnCredit > 0 && (
-                <span className="text-xs bg-amber-900/60 border border-amber-700 text-amber-300 px-2 py-0.5 rounded-full">
+                <span className="flex items-center gap-1 text-xs bg-amber-900/60 border border-amber-700 text-amber-300 pl-2 pr-1 py-0.5 rounded-full">
                   Return credit: {store.returnCredit.toFixed(2)}
+                  <button
+                    onClick={() => store.clearReturnCredit()}
+                    title="Cancel return credit"
+                    className="ml-0.5 text-amber-400 hover:text-red-400 transition-colors leading-none"
+                  >×</button>
                 </span>
               )}
             </div>
@@ -498,6 +532,17 @@ export default function POSMain() {
                 <span className="opacity-40 font-mono font-normal">F8</span>
               </button>
               <button
+                onClick={() => setBillRecallOpen(true)}
+                title="View / reprint a past invoice (F9)"
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border transition-colors bg-indigo-900/40 border-indigo-700 text-indigo-300 hover:bg-indigo-800/60"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                View Bill <span className="opacity-40 font-mono font-normal">F9</span>
+              </button>
+              <button
                 onClick={() => store.setShowReturnModal(true)}
                 title="Process a return / exchange"
                 className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border transition-colors bg-red-900/40 border-red-700 text-red-300 hover:bg-red-800/60"
@@ -511,7 +556,7 @@ export default function POSMain() {
             </div>
           </div>
           {itemsHidden && <AddItemBar />}
-          <BillTable />
+          <BillTable landscape={itemsHidden} posImage={posImage} />
         </div>
       </div>
 
@@ -522,6 +567,7 @@ export default function POSMain() {
       <SalesSummaryModal />
       {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
       {store.showReturnModal && <ReturnTab onClose={() => store.setShowReturnModal(false)} />}
+      {billRecallOpen && <BillRecallModal onClose={() => setBillRecallOpen(false)} />}
       <VirtualKeyboard />
       {queueModalOpen && (
         <OfflineQueueModal

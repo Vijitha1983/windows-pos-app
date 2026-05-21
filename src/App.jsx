@@ -117,7 +117,7 @@ export default function App() {
   const screen = store.currentScreen === 'pos' ? <POSMain /> : <Login />
   return (
     <>
-      <WindowControls />
+      {store.currentScreen !== 'pos' && <WindowControls />}
       <LicenseGate>{screen}</LicenseGate>
     </>
   )
