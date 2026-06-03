@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePOSStore } from '../store/posStore'
-import { getItem, getItems, searchItems, getWarehouseStock, getBaseURL, getItemPriceListRate } from '../services/api'
+import { getItem, getItems, searchItems, searchItemByBarcode, getWarehouseStock, getBaseURL, getItemPriceListRate } from '../services/api'
 import { cacheGet, cacheSet, cacheGetPersist, cacheSetPersist, cacheGetPersistStale } from '../services/cache'
 
 export default function ItemGrid() {
@@ -22,9 +22,13 @@ export default function ItemGrid() {
   const [showPicker, setShowPicker]       = useState(false)
 
   const searchRef = useRef(null)
-  const gridRef   = useRef(null)
-  const itemsRef  = useRef(items)
+  const gridRef        = useRef(null)
+  const itemsRef       = useRef(items)
+  const itemDialogRef  = useRef(itemDialog)
+  const paymentModalRef = useRef(paymentModal)
   useEffect(() => { itemsRef.current = items }, [items])
+  useEffect(() => { itemDialogRef.current = itemDialog }, [itemDialog])
+  useEffect(() => { paymentModalRef.current = paymentModal }, [paymentModal])
 
   const warehouse = posProfileData?.warehouse
 
@@ -156,13 +160,30 @@ export default function ItemGrid() {
     return true
   }
 
+  // Silently pre-warms the memory cache for the first N visible items so the first
+  // click on any of them skips the network round-trip entirely.
+  function prefetchItemDetails(itemList) {
+    if (!navigator.onLine) return
+    const toFetch = itemList.slice(0, 15).filter((it) => !cacheGet(`item:${it.item_code}`))
+    let i = 0
+    function next() {
+      if (i >= toFetch.length) return
+      const item = toFetch[i++]
+      getItem(item.item_code)
+        .then((full) => { cacheSet(`item:${full.item_code}`, full); cacheSetPersist(`item:${full.item_code}`, full) })
+        .catch(() => {})
+        .finally(() => setTimeout(next, 80))  // stagger to avoid server burst
+    }
+    setTimeout(next, 400)  // start after grid has rendered
+  }
+
   async function loadItems() {
     setLoading(true)
     try {
       const key = `items:${selectedGroup}:${searchQuery}`
       // 1. Memory hit
       const mem = cacheGet(key)
-      if (mem) { setItems(mem); return }
+      if (mem) { setItems(mem); prefetchItemDetails(mem); return }
 
       // 2. Offline — skip network entirely, serve from disk/memory cache
       if (!navigator.onLine) {
@@ -174,7 +195,7 @@ export default function ItemGrid() {
       // 3. Online + no search: try disk cache for instant display
       if (!searchQuery) {
         const disk = await cacheGetPersist(key)
-        if (disk) { setItems(disk); return }
+        if (disk) { setItems(disk); prefetchItemDetails(disk); return }
       }
 
       // 4. Network fetch
@@ -182,6 +203,7 @@ export default function ItemGrid() {
         ? await searchItems(searchQuery)
         : await getItems(selectedGroup !== 'All' ? { itemGroup: selectedGroup } : {}, 100)
       setItems(data)
+      prefetchItemDetails(data)
       if (!searchQuery) await cacheSetPersist(key, data)
       else cacheSet(key, data)
     } catch {
@@ -202,7 +224,9 @@ export default function ItemGrid() {
   useEffect(() => {
     const handler = (e) => {
       if (document.activeElement === searchRef.current) return
-      if (!items.length) return
+      if (itemDialogRef.current?.open) return   // item dialog open — refs always current
+      if (paymentModalRef.current) return        // payment modal open
+      if (!itemsRef.current.length) return
       const cols = getColumnCount()
       if (e.key === 'ArrowRight') { e.preventDefault(); setFocusedIdx((i) => Math.min(i + 1, items.length - 1)) }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); setFocusedIdx((i) => Math.max(i - 1, 0)) }
@@ -265,35 +289,120 @@ export default function ItemGrid() {
     }
   }
 
+  // Always-current ref so the barcode handler never calls a stale handleItemClick
+  const handleItemClickRef = useRef(null)
+  handleItemClickRef.current = handleItemClick
+
   // Barcode scanner (fast keystroke burst)
   const barcodeBuffer = useRef('')
   const barcodeTimer  = useRef(null)
+  const scanMode      = useRef(false) // true once scanner-speed confirmed
+  const pendingChar   = useRef(null)  // first char held until we know scan vs type
+  const pendingTimer  = useRef(null)
+
   useEffect(() => {
-    const handler = (e) => {
-      if (document.activeElement === searchRef.current) return
-      if (e.key.length !== 1) return
-      barcodeBuffer.current += e.key
-      clearTimeout(barcodeTimer.current)
-      barcodeTimer.current = setTimeout(async () => {
-        const code = barcodeBuffer.current.trim()
-        barcodeBuffer.current = ''
-        if (code.length < 3) return
-        try {
-          const results = await searchItems(code)
-          if (results.length === 1) {
-            handleItemClick(results[0])
-          } else if (results.length > 1) {
-            setPickerResults(results)
-            setShowPicker(true)
-            setPickerIdx(0)
-            setSearchQuery(code)
-            searchRef.current?.focus()
-          }
-        } catch {}
-      }, 120)
+    async function runScan(code) {
+      if (code.length < 2) return
+      setSearchQuery('')
+      setShowPicker(false)
+      searchRef.current?.blur()
+      try {
+        const exact = await searchItemByBarcode(code)
+        if (exact.length === 1) { handleItemClickRef.current(exact[0]); return }
+        if (exact.length > 1) {
+          setPickerResults(exact); setShowPicker(true)
+          setPickerIdx(0); setSearchQuery(code); searchRef.current?.focus(); return
+        }
+        const fuzzy = await searchItems(code)
+        if (fuzzy.length === 1) {
+          handleItemClickRef.current(fuzzy[0])
+        } else if (fuzzy.length > 1) {
+          setPickerResults(fuzzy); setShowPicker(true)
+          setPickerIdx(0); setSearchQuery(code); searchRef.current?.focus()
+        } else {
+          showError(`No item found for barcode: ${code}`)
+        }
+      } catch {}
     }
-    window.addEventListener('keypress', handler)
-    return () => window.removeEventListener('keypress', handler)
+
+    // Release a held first-char to the search field (was manual typing, not a scan)
+    function releasePending() {
+      if (pendingChar.current === null) return
+      const ch = pendingChar.current
+      pendingChar.current = null
+      clearTimeout(pendingTimer.current)
+      setSearchQuery((prev) => prev + ch)
+    }
+
+    let lastKeyTime = 0
+
+    const handler = (e) => {
+      if (e.ctrlKey || e.altKey || e.metaKey) return
+
+      const now = Date.now()
+      const gap = now - lastKeyTime
+
+      // ── Enter ──────────────────────────────────────────────────────────────
+      if (e.key === 'Enter') {
+        clearTimeout(pendingTimer.current)
+        // Include any still-pending first char in the code
+        const prefix = pendingChar.current || ''
+        pendingChar.current = null
+        const code   = (prefix + barcodeBuffer.current).trim()
+        const isScan = scanMode.current
+        barcodeBuffer.current = ''
+        scanMode.current = false
+        clearTimeout(barcodeTimer.current)
+        if (isScan && code.length >= 2) {
+          e.preventDefault()
+          e.stopPropagation()
+          runScan(code)
+        }
+        return
+      }
+
+      if (e.key.length !== 1) return
+      lastKeyTime = now
+      const isFast = gap < 80
+
+      if (isFast || scanMode.current) {
+        // ── Scanner-speed character ─────────────────────────────────────────
+        scanMode.current = true
+        e.preventDefault()    // Never reaches search field
+        e.stopPropagation()
+
+        // Absorb any held first-char into the buffer (it was part of this scan)
+        if (pendingChar.current !== null) {
+          clearTimeout(pendingTimer.current)
+          barcodeBuffer.current += pendingChar.current
+          pendingChar.current = null
+        }
+
+        barcodeBuffer.current += e.key
+        clearTimeout(barcodeTimer.current)
+        barcodeTimer.current = setTimeout(() => {
+          const code = barcodeBuffer.current.trim()
+          barcodeBuffer.current = ''
+          scanMode.current = false
+          if (code.length >= 2) runScan(code)
+        }, 120)
+
+      } else {
+        // ── First / slow character — hold it for 80 ms ──────────────────────
+        // If next char is fast → it was a scan (absorb into buffer above)
+        // If no fast char within 80 ms → release to search field as normal typing
+        releasePending()            // flush any previously held char first
+        e.preventDefault()          // hold — don't go to search field yet
+
+        pendingChar.current = e.key
+        pendingTimer.current = setTimeout(() => {
+          releasePending()          // timed out → normal typing, release to search
+        }, 80)
+      }
+    }
+
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
   }, [])
 
   function handleSearchKeyDown(e) {

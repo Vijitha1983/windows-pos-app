@@ -234,6 +234,12 @@ export async function searchDeliveredSerialNos(query) {
   return data.data || []
 }
 
+// Marks a redeemed gift voucher serial as Inactive so it cannot be reused.
+// Called after successful invoice submission. Uses allSettled at call site so failures don't block checkout.
+export async function markSerialNoUsed(serialNo) {
+  return request('PUT', `/api/resource/Serial No/${encodeURIComponent(serialNo)}`, { status: 'Inactive' })
+}
+
 // Returns available (Active) serial numbers for an item, optionally scoped to a warehouse.
 export async function getAvailableSerialNos(itemCode, warehouse) {
   const filters = [
@@ -379,6 +385,39 @@ export async function getItems(filters = {}, limit = 100, start = 0) {
   return data.data
 }
 
+// Exact barcode lookup — item_code exact match first, then Item Barcode table.
+// Each step is independent so a failure in one does not break the other.
+export async function searchItemByBarcode(barcode) {
+  const base = [['disabled', '=', 0], ['is_sales_item', '=', 1]]
+  // Step 1: exact item_code match (fastest — most shops use item_code as barcode)
+  try {
+    const res = await request('GET', '/api/resource/Item' + qs({
+      fields: ITEM_FIELDS,
+      filters: JSON.stringify([...base, ['item_code', '=', barcode]]),
+      limit_page_length: 1,
+    }))
+    if (res.data?.length > 0) return res.data
+  } catch {}
+  // Step 2: Item Barcode child table (shops that store barcodes separately)
+  try {
+    const barcodeRes = await request('GET', '/api/resource/Item Barcode' + qs({
+      fields: JSON.stringify(['parent']),
+      filters: JSON.stringify([['barcode', '=', barcode]]),
+      limit_page_length: 1,
+    }))
+    if (barcodeRes.data?.length > 0) {
+      const code = barcodeRes.data[0].parent
+      const itemRes = await request('GET', '/api/resource/Item' + qs({
+        fields: ITEM_FIELDS,
+        filters: JSON.stringify([...base, ['item_code', '=', code]]),
+        limit_page_length: 1,
+      }))
+      if (itemRes.data?.length > 0) return itemRes.data
+    }
+  } catch {}
+  return []
+}
+
 export async function searchItems(query) {
   const base = [['disabled', '=', 0], ['is_sales_item', '=', 1]]
 
@@ -506,6 +545,42 @@ export async function getPOSInvoices(filters = {}) {
   return data.data
 }
 
+// Fetch recent POS invoices (all, including returns) for Bill Recall view
+export async function getRecentPOSInvoices(posProfile, limit = 40) {
+  const apiFilters = [['docstatus', '=', 1]]
+  if (posProfile) apiFilters.push(['pos_profile', '=', posProfile])
+  const data = await request('GET', '/api/resource/POS Invoice' + qs({
+    fields: JSON.stringify(['name', 'customer_name', 'grand_total', 'posting_date', 'is_return']),
+    filters: JSON.stringify(apiFilters),
+    limit_page_length: limit,
+    order_by: 'posting_date desc',
+  }))
+  return data.data
+}
+
+// Search all submitted POS invoices by name or customer (includes returns)
+export async function searchAllPOSInvoices(query, posProfile) {
+  const base = [['docstatus', '=', 1]]
+  if (posProfile) base.push(['pos_profile', '=', posProfile])
+  const fields = JSON.stringify(['name', 'customer_name', 'grand_total', 'posting_date', 'is_return'])
+  const [r1, r2] = await Promise.all([
+    request('GET', '/api/resource/POS Invoice' + qs({
+      fields, order_by: 'posting_date desc', limit_page_length: 20,
+      filters: JSON.stringify([...base, ['name', 'like', `%${query}%`]]),
+    })),
+    request('GET', '/api/resource/POS Invoice' + qs({
+      fields, order_by: 'posting_date desc', limit_page_length: 20,
+      filters: JSON.stringify([...base, ['customer_name', 'like', `%${query}%`]]),
+    })),
+  ])
+  const seen = new Set()
+  return [...r1.data, ...r2.data].filter((inv) => {
+    if (seen.has(inv.name)) return false
+    seen.add(inv.name)
+    return true
+  })
+}
+
 // Search submitted POS Invoices (not returns) by invoice name, customer name, or date
 export async function searchPOSInvoices(query, posProfile) {
   const base = [['docstatus', '=', 1], ['is_return', '=', 0]]
@@ -526,11 +601,30 @@ export async function searchPOSInvoices(query, posProfile) {
 
   const [r1, r2] = await Promise.all([byName, byCust])
   const seen = new Set()
-  return [...r1.data, ...r2.data].filter((inv) => {
+  const candidates = [...r1.data, ...r2.data].filter((inv) => {
     if (seen.has(inv.name)) return false
     seen.add(inv.name)
     return true
   })
+
+  if (candidates.length === 0) return []
+
+  // Exclude invoices that already have a submitted return allocated against them
+  try {
+    const returnedRes = await request('GET', '/api/resource/POS Invoice' + qs({
+      fields:            JSON.stringify(['return_against']),
+      filters:           JSON.stringify([
+        ['docstatus',       '=', 1],
+        ['is_return',       '=', 1],
+        ['return_against',  'in', candidates.map((i) => i.name)],
+      ]),
+      limit_page_length: 500,
+    }))
+    const alreadyReturned = new Set((returnedRes.data || []).map((r) => r.return_against))
+    return candidates.filter((inv) => !alreadyReturned.has(inv.name))
+  } catch {
+    return candidates   // fallback: show all if the extra check fails
+  }
 }
 
 // Fetch a single POS Invoice with all its items
@@ -552,6 +646,7 @@ export async function submitReturnInvoice(originalDoc, returnItems, posProfile, 
     rate:      originalItem.rate,
     uom:       originalItem.uom || 'Nos',
     warehouse: originalItem.warehouse || originalDoc.set_warehouse,
+    ...(originalItem.item_tax_template ? { item_tax_template: originalItem.item_tax_template } : {}),
     ...(originalItem.serial_no ? { serial_no: originalItem.serial_no } : {}),
     ...(originalItem.batch_no  ? { batch_no:  originalItem.batch_no  } : {}),
   }))
@@ -579,6 +674,8 @@ export async function submitReturnInvoice(originalDoc, returnItems, posProfile, 
     paid_amount:       -returnTotal,
     items,
     payments,
+    ...(originalDoc.taxes_and_charges ? { taxes_and_charges: originalDoc.taxes_and_charges } : {}),
+    ...(originalDoc.taxes?.length     ? { taxes: originalDoc.taxes }                         : {}),
   }
 
   let draft
@@ -668,41 +765,60 @@ export async function getTodayInvoiceSummary(posProfile, sessionStartDate, usern
   if (sessionStartDate) siFilters.push(['creation', '>=', sessionStartDate])
   if (username) siFilters.push(['owner', '=', username])
 
-  // Fetch POS invoices and credit invoices in parallel
-  const [invoicesRes, siRes] = await Promise.all([
+  const invoiceFields = JSON.stringify(['name', 'grand_total', 'change_amount', 'customer', 'consolidated_invoice', 'is_return', 'return_against'])
+
+  // Three parallel fetches: regular invoices, return invoices, credit (Sales) invoices
+  // Splitting regular vs return server-side avoids relying on is_return being truthy in the response.
+  const [regularRes, returnRes, siRes] = await Promise.all([
     request('GET', '/api/resource/POS Invoice' + qs({
-      filters:           JSON.stringify(posFilters),
-      fields:            JSON.stringify(['name', 'grand_total', 'customer', 'consolidated_invoice', 'is_return', 'return_against']),
+      filters:           JSON.stringify([...posFilters, ['is_return', '=', 0]]),
+      fields:            invoiceFields,
       limit_page_length: 500,
       order_by:          'creation desc',
     })),
+    request('GET', '/api/resource/POS Invoice' + qs({
+      filters:           JSON.stringify([...posFilters, ['is_return', '=', 1]]),
+      fields:            invoiceFields,
+      limit_page_length: 500,
+      order_by:          'creation desc',
+    })).catch(() => ({ data: [] })),
     request('GET', '/api/resource/Sales Invoice' + qs({
       filters:           JSON.stringify(siFilters),
       fields:            JSON.stringify(['name', 'grand_total', 'customer']),
       limit_page_length: 500,
       order_by:          'creation desc',
-    })).catch(() => ({ data: [] })),  // offline or permission issue — skip credit
+    })).catch(() => ({ data: [] })),
   ])
 
-  const allInvoices     = invoicesRes.data || []
-  // Return invoices have is_return=1 and negative grand_total
-  const regularInvoices = allInvoices.filter((inv) => !inv.is_return)
-  const returnInvCount  = allInvoices.length - regularInvoices.length
+  const regularInvoices = regularRes.data  || []
+  const returnInvoices  = returnRes.data   || []
+  const allInvoices     = [...regularInvoices, ...returnInvoices]
+  const returnInvCount  = returnInvoices.length
   const creditInvoices  = siRes.data || []
 
   const creditTotal = creditInvoices.reduce((s, i) => s + (i.grand_total || 0), 0)
-  // Return invoice grand_total is negative in ERPNext — this gives correct net total
-  const totalSales  = allInvoices.reduce((s, i) => s + (i.grand_total || 0), 0) + creditTotal
+  // Gross sales = sum of regular (non-return) invoices only
+  const totalSales  = regularInvoices.reduce((s, i) => s + (i.grand_total || 0), 0) + creditTotal
 
   if (allInvoices.length === 0 && creditInvoices.length === 0) {
     return { invoices: [], creditInvoices: [], totalSales: 0, creditTotal: 0, byMode: {}, returnTotal: 0, count: 0, creditCount: 0, returnCount: 0 }
   }
 
-  // ── Payment breakdown (all POS Invoices incl. returns) ───────────────────
-  // Including negative return payments nets them against exchange invoice cash,
-  // so byMode['Cash'] shows actual cash collected (not inflated by return credits).
-  const names = allInvoices.map((i) => i.name)
-  let byMode = {}
+  // ── Payment breakdown ────────────────────────────────────────────────────
+  // byMode     = net (all invoices incl. returns) — used for cashier formula
+  // byModeGross = gross from regular invoices only — used for sales display rows
+  // Return invoice payments are negative; they correctly net byMode['Cash'] for
+  // the cashier, but must NOT reduce the "Cash Sales" display figure.
+  const names        = allInvoices.map((i) => i.name)
+  const regularNames = new Set(regularInvoices.map((i) => i.name))
+  // grossNames = regular invoices eligible for "Cash Sales" gross.
+  // Exchange-return originals must be excluded (replaced by the new invoice).
+  // Detection strategy: fetch payment accounts — exchange credit payments on the replacement
+  // invoice use the AR/receivable account, not the cash account. Resolved after payment fetch.
+  const grossNames = new Set(regularInvoices.map(i => i.name))
+  let byMode      = {}
+  let byModeGross = {}
+  let returnByMode = {}
   let returnTotal = 0
 
   if (names.length > 0) {
@@ -712,12 +828,20 @@ export async function getTodayInvoiceSummary(posProfile, sessionStartDate, usern
           ['parent',     'in', names],
           ['parenttype', '=', 'POS Invoice'],
         ]),
-        fields: JSON.stringify(['mode_of_payment', 'amount']),
+        fields: JSON.stringify(['parent', 'mode_of_payment', 'amount']),
         limit_page_length: 2000,
       }))
       for (const p of paymentsRes.data || []) {
         byMode[p.mode_of_payment] = (byMode[p.mode_of_payment] || 0) + p.amount
-        if (p.amount < 0) returnTotal += Math.abs(p.amount)
+        if (p.amount < 0) {
+          returnTotal += Math.abs(p.amount)
+          if (!regularNames.has(p.parent)) {
+            returnByMode[p.mode_of_payment] = (returnByMode[p.mode_of_payment] || 0) + Math.abs(p.amount)
+          }
+        }
+        if (grossNames.has(p.parent) && p.amount > 0) {
+          byModeGross[p.mode_of_payment] = (byModeGross[p.mode_of_payment] || 0) + p.amount
+        }
       }
     } catch {
       for (const inv of allInvoices.slice(0, 200)) {
@@ -725,18 +849,33 @@ export async function getTodayInvoiceSummary(posProfile, sessionStartDate, usern
           const doc = await request('GET', `/api/resource/POS Invoice/${encodeURIComponent(inv.name)}`)
           for (const p of doc.data?.payments || []) {
             byMode[p.mode_of_payment] = (byMode[p.mode_of_payment] || 0) + p.amount
-            if (p.amount < 0) returnTotal += Math.abs(p.amount)
+            if (p.amount < 0) {
+              returnTotal += Math.abs(p.amount)
+              if (!regularNames.has(inv.name)) {
+                returnByMode[p.mode_of_payment] = (returnByMode[p.mode_of_payment] || 0) + Math.abs(p.amount)
+              }
+            }
+            if (grossNames.has(inv.name) && p.amount > 0) {
+              byModeGross[p.mode_of_payment] = (byModeGross[p.mode_of_payment] || 0) + p.amount
+            }
           }
         } catch { /* skip */ }
       }
     }
   }
 
+  // Cash given back to customers (overpayment change + return credit surplus)
+  // Only count regular (non-return) invoices — return invoices don't give change.
+  const totalChangeGiven = regularInvoices.reduce((s, i) => s + (parseFloat(i.change_amount) || 0), 0)
+
   return {
     invoices: allInvoices, creditInvoices,
     totalSales, creditTotal,
     byMode,
+    byModeGross,
+    returnByMode,
     returnTotal,
+    totalChangeGiven,
     count: regularInvoices.length,
     creditCount: creditInvoices.length,
     returnCount: returnInvCount,

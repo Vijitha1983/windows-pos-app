@@ -34,6 +34,19 @@ export default function POSMain() {
     window.electronAPI?.storeGet('posImage').then((v) => setPosImage(v || null))
   }, [settingsOpen])
 
+  // Keep only groups listed in the POS Profile item_groups child table.
+  // Uses getState() so it always reads live Zustand state, not a stale closure.
+  // Falls back to showing all groups if the profile has none configured.
+  function filterByProfile(allGroups) {
+    const profileData = usePOSStore.getState().posProfileData
+    const rows = profileData?.item_groups   // ERPNext child table rows
+    if (!rows || rows.length === 0) return allGroups
+    // ERPNext uses field name "item_group" on each child row
+    const allowedSet = new Set(rows.map((r) => r.item_group).filter(Boolean))
+    if (allowedSet.size === 0) return allGroups
+    return allGroups.filter((g) => allowedSet.has(g.name))
+  }
+
   async function handleSync() {
     if (store.syncStatus === 'syncing') return
     store.setSyncStatus('syncing')
@@ -54,7 +67,7 @@ export default function POSMain() {
       ])
       setSyncProgress(70)
 
-      store.setItemGroups(groups)
+      store.setItemGroups(filterByProfile(groups))
       store.setItems(allData)
       store.setPromoSchemes(promos)
 
@@ -112,15 +125,17 @@ export default function POSMain() {
     return () => clearInterval(id)
   }, [])
 
-  // Load item groups + pre-cache All items + promo schemes for offline use
+  // Load item groups + pre-cache All items + promo schemes for offline use.
+  // Re-runs when posProfileData changes so the filter is applied with the correct profile.
   useEffect(() => {
+    if (!store.posProfileData) return   // wait until profile is loaded
     async function load() {
       // Serve from disk immediately if available
       const [cachedGroups, cachedPromos] = await Promise.all([
         cacheGetPersist('itemGroups'),
         cacheGetPersist('promoSchemes'),
       ])
-      if (cachedGroups) store.setItemGroups(cachedGroups)
+      if (cachedGroups) store.setItemGroups(filterByProfile(cachedGroups))
       if (cachedPromos) store.setPromoSchemes(cachedPromos)
 
       // Refresh from network in background
@@ -129,10 +144,10 @@ export default function POSMain() {
           getItemGroups(),
           getPromotionalSchemes().catch(() => []),
         ])
-        store.setItemGroups(groups)
+        store.setItemGroups(filterByProfile(groups))
         store.setPromoSchemes(promos)
         await Promise.all([
-          cacheSetPersist('itemGroups', groups),
+          cacheSetPersist('itemGroups', groups),   // always cache unfiltered
           cacheSetPersist('promoSchemes', promos),
         ])
 
@@ -145,7 +160,7 @@ export default function POSMain() {
       } catch { /* offline on startup — disk cache already served above */ }
     }
     load()
-  }, [])
+  }, [store.posProfileData])
 
   // Auto-sync queued invoices silently when connection is restored
   useEffect(() => {
